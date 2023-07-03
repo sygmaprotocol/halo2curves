@@ -1,147 +1,5 @@
 #[macro_export]
-macro_rules! batch_add {
-    () => {
-        fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
-            points: &mut [Self],
-            output_indices: &[u32],
-            num_points: usize,
-            offset: usize,
-            bases: &[Self],
-            base_positions: &[u32],
-        ) {
-            // assert!(Self::constant_a().is_zero());
-
-            let get_point = |point_data: u32| -> Self {
-                let negate = point_data & 0x80000000 != 0;
-                let base_idx = (point_data & 0x7FFFFFFF) as usize;
-                if negate {
-                    bases[base_idx].neg()
-                } else {
-                    bases[base_idx]
-                }
-            };
-
-            // Affine addition formula (P != Q):
-            // - lambda = (y_2 - y_1) / (x_2 - x_1)
-            // - x_3 = lambda^2 - (x_2 + x_1)
-            // - y_3 = lambda * (x_1 - x_3) - y_1
-
-            // Batch invert accumulator
-            let mut acc = Self::Base::one();
-
-            for i in (0..num_points).step_by(2) {
-                // Where that result of the point addition will be stored
-                let out_idx = output_indices[i >> 1] as usize - offset;
-
-                #[cfg(all(feature = "prefetch", target_arch = "x86_64"))]
-                if i < num_points - 2 {
-                    if LOAD_POINTS {
-                        $crate::prefetch::<Self>(bases, base_positions[i + 2] as usize);
-                        $crate::prefetch::<Self>(bases, base_positions[i + 3] as usize);
-                    }
-                    $crate::prefetch::<Self>(
-                        points,
-                        output_indices[(i >> 1) + 1] as usize - offset,
-                    );
-                }
-                if LOAD_POINTS {
-                    points[i] = get_point(base_positions[i]);
-                    points[i + 1] = get_point(base_positions[i + 1]);
-                }
-
-                if COMPLETE {
-                    // Nothing to do here if one of the points is zero
-                    if (points[i].is_identity() | points[i + 1].is_identity()).into() {
-                        continue;
-                    }
-
-                    if points[i].x == points[i + 1].x {
-                        if points[i].y == points[i + 1].y {
-                            // Point doubling (P == Q)
-                            // - s = (3 * x^2) / (2 * y)
-                            // - x_2 = s^2 - (2 * x)
-                            // - y_2 = s * (x - x_2) - y
-
-                            // (2 * x)
-                            points[out_idx].x = points[i].x + points[i].x;
-                            // x^2
-                            let xx = points[i].x.square();
-                            // (2 * y)
-                            points[i + 1].x = points[i].y + points[i].y;
-                            // (3 * x^2) * acc
-                            points[i + 1].y = (xx + xx + xx) * acc;
-                            // acc * (2 * y)
-                            acc *= points[i + 1].x;
-                            continue;
-                        } else {
-                            // Zero
-                            points[i] = Self::identity();
-                            points[i + 1] = Self::identity();
-                            continue;
-                        }
-                    }
-                }
-
-                // (x_2 + x_1)
-                points[out_idx].x = points[i].x + points[i + 1].x;
-                // (x_2 - x_1)
-                points[i + 1].x -= points[i].x;
-                // (y2 - y1) * acc
-                points[i + 1].y = (points[i + 1].y - points[i].y) * acc;
-                // acc * (x_2 - x_1)
-                acc *= points[i + 1].x;
-            }
-
-            // Batch invert
-            if COMPLETE {
-                if (!acc.is_zero()).into() {
-                    acc = acc.invert().unwrap();
-                }
-            } else {
-                acc = acc.invert().unwrap();
-            }
-
-            for i in (0..num_points).step_by(2).rev() {
-                // Where that result of the point addition will be stored
-                let out_idx = output_indices[i >> 1] as usize - offset;
-
-                #[cfg(all(feature = "prefetch", target_arch = "x86_64"))]
-                if i > 0 {
-                    $crate::prefetch::<Self>(
-                        points,
-                        output_indices[(i >> 1) - 1] as usize - offset,
-                    );
-                }
-
-                if COMPLETE {
-                    // points[i] is zero so the sum is points[i + 1]
-                    if points[i].is_identity().into() {
-                        points[out_idx] = points[i + 1];
-                        continue;
-                    }
-                    // points[i + 1] is zero so the sum is points[i]
-                    if points[i + 1].is_identity().into() {
-                        points[out_idx] = points[i];
-                        continue;
-                    }
-                }
-
-                // lambda
-                points[i + 1].y *= acc;
-                // acc * (x_2 - x_1)
-                acc *= points[i + 1].x;
-                // x_3 = lambda^2 - (x_2 + x_1)
-                points[out_idx].x = points[i + 1].y.square() - points[out_idx].x;
-                // y_3 = lambda * (x_1 - x_3) - y_1
-                points[out_idx].y =
-                    points[i + 1].y * (points[i].x - points[out_idx].x) - points[i].y;
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! new_curve_impl {
+macro_rules! new_curve_impl_bls12_381 {
     (($($privacy:tt)*),
     $name:ident,
     $name_affine:ident,
@@ -161,10 +19,11 @@ macro_rules! new_curve_impl {
             pub z: $base,
         }
 
-        #[derive(Copy, Clone, PartialEq, Hash, Serialize, Deserialize)]
+        #[derive(Copy, Clone)]
         $($privacy)* struct $name_affine {
             pub x: $base,
             pub y: $base,
+            pub infinity: Choice,
         }
 
         #[derive(Copy, Clone, Hash)]
@@ -190,6 +49,7 @@ macro_rules! new_curve_impl {
                 Self {
                     x: $generator.0,
                     y: $generator.1,
+                    infinity: Choice::from(0u8),
                 }
             }
 
@@ -211,6 +71,7 @@ macro_rules! new_curve_impl {
                         let p = $name_affine {
                             x,
                             y,
+                            infinity: 0.into(),
                         };
 
 
@@ -271,16 +132,11 @@ macro_rules! new_curve_impl {
 
         impl subtle::ConstantTimeEq for $name {
             fn ct_eq(&self, other: &Self) -> Choice {
-                // Is (xz^2, yz^3, z) equal to (x'z'^2, yz'^3, z') when converted to affine?
+                let x1 = self.x * other.z;
+                let x2 = other.x * self.z;
 
-                let z = other.z.square();
-                let x1 = self.x * z;
-                let z = z * other.z;
-                let y1 = self.y * z;
-                let z = self.z.square();
-                let x2 = other.x * z;
-                let z = z * self.z;
-                let y2 = other.y * z;
+                let y1 = self.y * other.z;
+                let y2 = other.y * self.z;
 
                 let self_is_zero = self.is_identity();
                 let other_is_zero = other.is_identity();
@@ -332,13 +188,8 @@ macro_rules! new_curve_impl {
             }
 
             fn is_on_curve(&self) -> Choice {
-
-                let z2 = self.z.square();
-                let z4 = z2.square();
-                let z6 = z4 * z2;
-                (self.y.square() - self.x.square() * self.x)
-                    .ct_eq(&(z6 * $name::curve_constant_b()))
-                    | self.z.is_zero()
+                (self.y.square() * self.z).ct_eq(&(self.x.square() * self.x + self.z.square() * self.z * $name::curve_constant_b()))
+                | self.z.is_zero()
             }
 
             fn b() -> Self::Base {
@@ -359,6 +210,8 @@ macro_rules! new_curve_impl {
 
             type AffineRepr = $name_affine;
 
+            /// Converts a batch of `G1Projective` elements into `G1Affine` elements. This
+            /// function will panic if `p.len() != q.len()`.
             fn batch_normalize(p: &[Self], q: &mut [Self::AffineRepr]) {
                 assert_eq!(p.len(), q.len());
 
@@ -386,11 +239,9 @@ macro_rules! new_curve_impl {
                     acc = $base::conditional_select(&(acc * p.z), &acc, skip);
 
                     // Set the coordinates to the correct value
-                    let tmp2 = tmp.square();
-                    let tmp3 = tmp2 * tmp;
-
-                    q.x = p.x * tmp2;
-                    q.y = p.y * tmp3;
+                    q.x = p.x * tmp;
+                    q.y = p.y * tmp;
+                    q.infinity = Choice::from(0u8);
 
                     *q = $name_affine::conditional_select(&q, &$name_affine::identity(), skip);
                 }
@@ -398,21 +249,20 @@ macro_rules! new_curve_impl {
 
             fn to_affine(&self) -> Self::AffineRepr {
                 let zinv = self.z.invert().unwrap_or($base::zero());
-                let zinv2 = zinv.square();
-                let x = self.x * zinv2;
-                let zinv3 = zinv2 * zinv;
-                let y = self.y * zinv3;
+                let x = self.x * zinv;
+                let y = self.y * zinv;
 
                 let tmp = $name_affine {
                     x,
                     y,
+                    infinity: Choice::from(0u8),
                 };
 
                 $name_affine::conditional_select(&tmp, &$name_affine::identity(), zinv.is_zero())
             }
         }
 
-        impl group::Group for $name {
+        impl group::Group for $name {  // G1, G2
             type Scalar = $scalar;
 
             fn random(mut rng: impl RngCore) -> Self {
@@ -420,22 +270,24 @@ macro_rules! new_curve_impl {
             }
 
             fn double(&self) -> Self {
-                let a = self.x.square();
-                let b = self.y.square();
-                let c = b.square();
-                let d = self.x + b;
-                let d = d.square();
-                let d = d - a - c;
-                let d = d + d;
-                let e = a + a + a;
-                let f = e.square();
-                let z3 = self.z * self.y;
+                let t0 = self.y.square();
+                let z3 = t0 + t0;
                 let z3 = z3 + z3;
-                let x3 = f - (d + d);
-                let c = c + c;
-                let c = c + c;
-                let c = c + c;
-                let y3 = e * (d - x3) - c;
+                let z3 = z3 + z3;
+                let t1 = self.y * self.z;
+                let t2 = self.z.square();
+                let t2 = $name::mul_by_3b(t2);
+                let x3 = t2 * z3;
+                let y3 = t0 + t2;
+                let z3 = t1 * z3;
+                let t1 = t2 + t2;
+                let t2 = t1 + t2;
+                let t0 = t0 - t2;
+                let y3 = t0 * y3;
+                let y3 = x3 + y3;
+                let t1 = self.x * self.y;
+                let x3 = t0 * t1;
+                let x3 = x3 + x3;
 
                 let tmp = $name {
                     x: x3,
@@ -453,7 +305,7 @@ macro_rules! new_curve_impl {
             fn identity() -> Self {
                 Self {
                     x: $base::zero(),
-                    y: $base::zero(),
+                    y: $base::one(),
                     z: $base::zero(),
                 }
             }
@@ -463,7 +315,7 @@ macro_rules! new_curve_impl {
             }
         }
 
-        impl GroupEncoding for $name {
+        impl GroupEncoding for $name { // G1
             type Repr = $name_compressed;
 
             fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
@@ -475,7 +327,7 @@ macro_rules! new_curve_impl {
             }
 
             fn to_bytes(&self) -> Self::Repr {
-                $name_affine::from(self).to_bytes()
+                $name_affine::from(self).to_bytes()  // G1Affine
             }
         }
 
@@ -549,13 +401,6 @@ macro_rules! new_curve_impl {
 
         // Affine implementations
 
-        // Iterator for multiple affine points in halo2-lib during BLS signature verification
-        impl<'a> std::iter::Sum<&'a Self> for $name_affine {
-            fn sum<I>(iter: I) -> $name_affine where I: Iterator<Item = &'a Self> {
-                iter.fold($name_affine::identity(), |acc, x| (acc + x).into())
-            }
-        }
-
         impl std::fmt::Debug for $name_affine {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
                 if self.is_identity().into() {
@@ -586,10 +431,15 @@ macro_rules! new_curve_impl {
 
         impl subtle::ConstantTimeEq for $name_affine {
             fn ct_eq(&self, other: &Self) -> Choice {
-                let z1 = self.is_identity();
-                let z2 = other.is_identity();
+                // The only cases in which two points are equal are
+                // 1. infinity is set on both
+                // 2. infinity is not set on both, and their coordinates are equal
 
-                (z1 & z2) | ((!z1) & (!z2) & (self.x.ct_eq(&other.x)) & (self.y.ct_eq(&other.y)))
+                (self.infinity & other.infinity)
+                    | ((!self.infinity)
+                        & (!other.infinity)
+                        & self.x.ct_eq(&other.x)
+                        & self.y.ct_eq(&other.y))
             }
         }
 
@@ -598,41 +448,26 @@ macro_rules! new_curve_impl {
                 $name_affine {
                     x: $base::conditional_select(&a.x, &b.x, choice),
                     y: $base::conditional_select(&a.y, &b.y, choice),
+                    infinity: Choice::conditional_select(&a.infinity, &b.infinity, choice),
                 }
             }
         }
 
         impl cmp::Eq for $name_affine {}
 
+        impl cmp::PartialEq for $name_affine {
+            #[inline]
+            fn eq(&self, other: &Self) -> bool {
+                bool::from(self.ct_eq(other))
+            }
+        }
+
         impl group::GroupEncoding for $name_affine {
             type Repr = $name_compressed;
 
             fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
-                let bytes = &bytes.0;
-                let mut tmp = *bytes;
-                let ysign = Choice::from(tmp[$compressed_size - 1] >> 7);
-                tmp[$compressed_size - 1] &= 0b0111_1111;
-                let mut xbytes = [0u8; $base::size()];
-                xbytes.copy_from_slice(&tmp[ ..$base::size()]);
 
-                $base::from_bytes(&xbytes).and_then(|x| {
-                    CtOption::new(Self::identity(), x.is_zero() & (!ysign)).or_else(|| {
-                        let x3 = x.square() * x;
-                        (x3 + $name::curve_constant_b()).sqrt().and_then(|y| {
-                            let sign = Choice::from(y.to_bytes()[0] & 1);
-
-                            let y = $base::conditional_select(&y, &-y, ysign ^ sign);
-
-                            CtOption::new(
-                                $name_affine {
-                                    x,
-                                    y,
-                                },
-                                Choice::from(1u8),
-                            )
-                        })
-                    })
-                })
+                Self::from_compressed(&bytes.0)
             }
 
             fn from_bytes_unchecked(bytes: &Self::Repr) -> CtOption<Self> {
@@ -640,56 +475,48 @@ macro_rules! new_curve_impl {
             }
 
             fn to_bytes(&self) -> Self::Repr {
-                if bool::from(self.is_identity()) {
-                    $name_compressed::default()
-                } else {
-                    let (x, y) = (self.x, self.y);
-                    let sign = (y.to_bytes()[0] & 1) << 7;
-                    let mut xbytes = [0u8; $compressed_size];
-                    xbytes[..$base::size()].copy_from_slice(&x.to_bytes());
-                    xbytes[$compressed_size - 1] |= sign;
-                    $name_compressed(xbytes)
-                }
+                $name_compressed(self.to_compressed())
             }
         }
 
-        impl $crate::serde::SerdeObject for $name_affine {
-            fn from_raw_bytes_unchecked(bytes: &[u8]) -> Self {
-                debug_assert_eq!(bytes.len(), 2 * $base::size());
-                let [x, y] =
-                    [0, $base::size()].map(|i| $base::from_raw_bytes_unchecked(&bytes[i..i + $base::size()]));
-                Self { x, y }
-            }
-            fn from_raw_bytes(bytes: &[u8]) -> Option<Self> {
-                if bytes.len() != 2 * $base::size() {
-                    return None;
-                }
-                let [x, y] = [0, $base::size()].map(|i| $base::from_raw_bytes(&bytes[i..i + $base::size()]));
-                x.zip(y).and_then(|(x, y)| {
-                    let res = Self { x, y };
-                    // Check that the point is on the curve.
-                    bool::from(res.is_on_curve()).then(|| res)
-                })
-            }
-            fn to_raw_bytes(&self) -> Vec<u8> {
-                let mut res = Vec::with_capacity(2 * $base::size());
-                Self::write_raw(self, &mut res).unwrap();
-                res
-            }
-            fn read_raw_unchecked<R: std::io::Read>(reader: &mut R) -> Self {
-                let [x, y] = [(); 2].map(|_| $base::read_raw_unchecked(reader));
-                Self { x, y }
-            }
-            fn read_raw<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-                let x = $base::read_raw(reader)?;
-                let y = $base::read_raw(reader)?;
-                Ok(Self { x, y })
-            }
-            fn write_raw<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-                self.x.write_raw(writer)?;
-                self.y.write_raw(writer)
-            }
-        }
+        // TODO [serde] Add support for BLS12-381
+        // impl $crate::serde::SerdeObject for $name_affine {
+        //     fn from_raw_bytes_unchecked(bytes: &[u8]) -> Self {
+        //         debug_assert_eq!(bytes.len(), 2 * $base::size());
+        //         let [x, y] =
+        //             [0, $base::size()].map(|i| $base::from_raw_bytes_unchecked(&bytes[i..i + $base::size()]));
+        //         Self { x, y }
+        //     }
+        //     fn from_raw_bytes(bytes: &[u8]) -> Option<Self> {
+        //         if bytes.len() != 2 * $base::size() {
+        //             return None;
+        //         }
+        //         let [x, y] = [0, $base::size()].map(|i| $base::from_raw_bytes(&bytes[i..i + $base::size()]));
+        //         x.zip(y).and_then(|(x, y)| {
+        //             let res = Self { x, y };
+        //             // Check that the point is on the curve.
+        //             bool::from(res.is_on_curve()).then(|| res)
+        //         })
+        //     }
+        //     fn to_raw_bytes(&self) -> Vec<u8> {
+        //         let mut res = Vec::with_capacity(2 * $base::size());
+        //         Self::write_raw(self, &mut res).unwrap();
+        //         res
+        //     }
+        //     fn read_raw_unchecked<R: std::io::Read>(reader: &mut R) -> Self {
+        //         let [x, y] = [(); 2].map(|_| $base::read_raw_unchecked(reader));
+        //         Self { x, y }
+        //     }
+        //     fn read_raw<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        //         let x = $base::read_raw(reader)?;
+        //         let y = $base::read_raw(reader)?;
+        //         Ok(Self { x, y })
+        //     }
+        //     fn write_raw<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        //         self.x.write_raw(writer)?;
+        //         self.y.write_raw(writer)
+        //     }
+        // }
 
         impl group::prime::PrimeCurveAffine for $name_affine {
             type Curve = $name;
@@ -703,19 +530,20 @@ macro_rules! new_curve_impl {
             fn identity() -> Self {
                 Self {
                     x: $base::zero(),
-                    y: $base::zero(),
+                    y: $base::one(),
+                    infinity: Choice::from(1u8),
                 }
             }
 
             fn is_identity(&self) -> Choice {
-                self.x.is_zero() & self.y.is_zero()
+                self.infinity
             }
 
             fn to_curve(&self) -> Self::Curve {
                 $name {
                     x: self.x,
                     y: self.y,
-                    z: $base::conditional_select(&$base::one(), &$base::zero(), self.is_identity()),
+                    z: $base::conditional_select(&$base::one(), &$base::zero(), self.infinity),
                 }
             }
         }
@@ -750,7 +578,7 @@ macro_rules! new_curve_impl {
             fn is_on_curve(&self) -> Choice {
                 // y^2 - x^3 - ax ?= b
                 (self.y.square() - self.x.square() * self.x).ct_eq(&$name::curve_constant_b())
-                    | self.is_identity()
+                    | self.infinity
             }
 
             fn coordinates(&self) -> CtOption<Coordinates<Self>> {
@@ -759,7 +587,7 @@ macro_rules! new_curve_impl {
 
             fn from_xy(x: Self::Base, y: Self::Base) -> CtOption<Self> {
                 let p = $name_affine {
-                    x, y
+                    x, y, infinity: Choice::from(0u8),
                 };
                 CtOption::new(p, p.is_on_curve())
             }
@@ -817,42 +645,44 @@ macro_rules! new_curve_impl {
             type Output = $name;
 
             fn add(self, rhs: &'a $name) -> $name {
-                if bool::from(self.is_identity()) {
-                    *rhs
-                } else if bool::from(rhs.is_identity()) {
-                    *self
-                } else {
-                    let z1z1 = self.z.square();
-                    let z2z2 = rhs.z.square();
-                    let u1 = self.x * z2z2;
-                    let u2 = rhs.x * z1z1;
-                    let s1 = self.y * z2z2 * rhs.z;
-                    let s2 = rhs.y * z1z1 * self.z;
+                let t0 = self.x * rhs.x;
+                let t1 = self.y * rhs.y;
+                let t2 = self.z * rhs.z;
+                let t3 = self.x + self.y;
+                let t4 = rhs.x + rhs.y;
+                let t3 = t3 * t4;
+                let t4 = t0 + t1;
+                let t3 = t3 - t4;
+                let t4 = self.y + self.z;
+                let x3 = rhs.y + rhs.z;
+                let t4 = t4 * x3;
+                let x3 = t1 + t2;
+                let t4 = t4 - x3;
+                let x3 = self.x + self.z;
+                let y3 = rhs.x + rhs.z;
+                let x3 = x3 * y3;
+                let y3 = t0 + t2;
+                let y3 = x3 - y3;
+                let x3 = t0 + t0;
+                let t0 = x3 + t0;
+                let t2 = $name::mul_by_3b(t2);
+                let z3 = t1 + t2;
+                let t1 = t1 - t2;
+                let y3 = $name::mul_by_3b(y3);
+                let x3 = t4 * y3;
+                let t2 = t3 * t1;
+                let x3 = t2 - x3;
+                let y3 = y3 * t0;
+                let t1 = t1 * z3;
+                let y3 = t1 + y3;
+                let t0 = t0 * t3;
+                let z3 = z3 * t4;
+                let z3 = z3 + t0;
 
-                    if u1 == u2 {
-                        if s1 == s2 {
-                            self.double()
-                        } else {
-                            $name::identity()
-                        }
-                    } else {
-                        let h = u2 - u1;
-                        let i = (h + h).square();
-                        let j = h * i;
-                        let r = s2 - s1;
-                        let r = r + r;
-                        let v = u1 * i;
-                        let x3 = r.square() - j - v - v;
-                        let s1 = s1 * j;
-                        let s1 = s1 + s1;
-                        let y3 = r * (v - x3) - s1;
-                        let z3 = (self.z + rhs.z).square() - z1z1 - z2z2;
-                        let z3 = z3 * h;
-
-                        $name {
-                            x: x3, y: y3, z: z3
-                        }
-                    }
+                $name {
+                    x: x3,
+                    y: y3,
+                    z: z3,
                 }
             }
         }
@@ -861,41 +691,41 @@ macro_rules! new_curve_impl {
             type Output = $name;
 
             fn add(self, rhs: &'a $name_affine) -> $name {
-                if bool::from(self.is_identity()) {
-                    rhs.to_curve()
-                } else if bool::from(rhs.is_identity()) {
-                    *self
-                } else {
-                    let z1z1 = self.z.square();
-                    let u2 = rhs.x * z1z1;
-                    let s2 = rhs.y * z1z1 * self.z;
+                // Algorithm 8, https://eprint.iacr.org/2015/1060.pdf
+                let t0 = self.x * rhs.x;
+                let t1 = self.y * rhs.y;
+                let t3 = rhs.x + rhs.y;
+                let t4 = self.x + self.y;
+                let t3 = t3 * t4;
+                let t4 = t0 + t1;
+                let t3 = t3 - t4;
+                let t4 = rhs.y * self.z;
+                let t4 = t4 + self.y;
+                let y3 = rhs.x * self.z;
+                let y3 = y3 + self.x;
+                let x3 = t0 + t0;
+                let t0 = x3 + t0;
+                let t2 = $name::mul_by_3b(self.z);
+                let z3 = t1 + t2;
+                let t1 = t1 - t2;
+                let y3 = $name::mul_by_3b(y3);
+                let x3 = t4 * y3;
+                let t2 = t3 * t1;
+                let x3 = t2 - x3;
+                let y3 = y3 * t0;
+                let t1 = t1 * z3;
+                let y3 = t1 + y3;
+                let t0 = t0 * t3;
+                let z3 = z3 * t4;
+                let z3 = z3 + t0;
 
-                    if self.x == u2 {
-                        if self.y == s2 {
-                            self.double()
-                        } else {
-                            $name::identity()
-                        }
-                    } else {
-                        let h = u2 - self.x;
-                        let hh = h.square();
-                        let i = hh + hh;
-                        let i = i + i;
-                        let j = h * i;
-                        let r = s2 - self.y;
-                        let r = r + r;
-                        let v = self.x * i;
-                        let x3 = r.square() - j - v - v;
-                        let j = self.y * j;
-                        let j = j + j;
-                        let y3 = r * (v - x3) - j;
-                        let z3 = (self.z + h).square() - z1z1 - hh;
+                let tmp = $name {
+                    x: x3,
+                    y: y3,
+                    z: z3,
+                };
 
-                        $name {
-                            x: x3, y: y3, z: z3
-                        }
-                    }
-                }
+                $name::conditional_select(&tmp, self, rhs.is_identity())
             }
         }
 
@@ -927,16 +757,17 @@ macro_rules! new_curve_impl {
 
             fn mul(self, other: &'b $scalar) -> Self::Output {
                 let mut acc = $name::identity();
+                let other = other.to_bytes();
                 for bit in other
-                    .to_repr()
+                    // .to_repr()
                     .iter()
                     .rev()
                     .flat_map(|byte| (0..8).rev().map(move |i| Choice::from((byte >> i) & 1u8)))
+                    .skip(1)
                 {
                     acc = acc.double();
                     acc = $name::conditional_select(&acc, &(acc + self), bit);
                 }
-
                 acc
             }
         }
@@ -947,7 +778,8 @@ macro_rules! new_curve_impl {
             fn neg(self) -> $name_affine {
                 $name_affine {
                     x: self.x,
-                    y: -self.y,
+                    y: $base::conditional_select(&-self.y, &$base::one(), self.infinity),
+                    infinity: self.infinity,
                 }
             }
         }
@@ -1027,23 +859,8 @@ macro_rules! new_curve_impl {
             type Output = $name;
 
             fn mul(self, other: &'b $scalar) -> Self::Output {
-                let mut acc = $name::identity();
-
-                // This is a simple double-and-add implementation of point
-                // multiplication, moving from most significant to least
-                // significant bit of the scalar.
-
-                for bit in other
-                    .to_repr()
-                    .iter()
-                    .rev()
-                    .flat_map(|byte| (0..8).rev().map(move |i| Choice::from((byte >> i) & 1u8)))
-                {
-                    acc = acc.double();
-                    acc = $name::conditional_select(&acc, &(acc + self), bit);
-                }
-
-                acc
+                // need to convert from $name_affine to $name
+                $name::from(self) * other
             }
         }
     };

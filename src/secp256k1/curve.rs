@@ -8,8 +8,8 @@ use core::ops::{Add, Mul, Neg, Sub};
 use ff::{Field, PrimeField};
 use group::Curve;
 use group::{prime::PrimeCurveAffine, Group as _, GroupEncoding};
-
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
 impl Secp256k1 {
@@ -60,7 +60,6 @@ new_curve_impl!(
     Secp256k1,
     Secp256k1Affine,
     Secp256k1Compressed,
-    Secp256k1Uncompressed,
     33,
     Fp,
     Fq,

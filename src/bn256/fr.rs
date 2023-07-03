@@ -1,15 +1,14 @@
 #[cfg(feature = "asm")]
-use super::assembly::field_arithmetic_asm;
-#[cfg(not(feature = "asm"))]
-use crate::{field_arithmetic, field_specific};
+use super::assembly::assembly_field;
 
-use crate::arithmetic::{adc, mac, sbb};
+use crate::arithmetic::{adc, mac, macx, sbb};
 use core::convert::TryInto;
 use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 use ff::PrimeField;
 use pasta_curves::arithmetic::{FieldExt, Group, SqrtRatio};
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
 /// This represents an element of $\mathbb{F}_r$ where
@@ -20,12 +19,14 @@ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 // The internal representation of this type is four 64-bit unsigned
 // integers in little-endian order. `Fr` values are always in
 // Montgomery form; i.e., Fr(a) = aR mod r, with R = 2^256.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// PartialEq is derived for Hash, but if privacy perservation is needed, then constant time functions should be used:
+// see NCC-E001151-003 in https://research.nccgroup.com/2021/11/02/public-report-zcash-nu5-cryptography-review/
 pub struct Fr(pub(crate) [u64; 4]);
 
 /// Constant representing the modulus
 /// r = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
-pub const MODULUS: Fr = Fr([
+const MODULUS: Fr = Fr([
     0x43e1f593f0000001,
     0x2833e84879b97091,
     0xb85045b68181585d,
@@ -117,12 +118,13 @@ const ZETA: Fr = Fr::from_raw([
 ]);
 
 use crate::{
-    field_common, impl_add_binop_specify_output, impl_binops_additive,
-    impl_binops_additive_specify_output, impl_binops_multiplicative,
+    field_arithmetic, field_common, field_specific, impl_add_binop_specify_output,
+    impl_binops_additive, impl_binops_additive_specify_output, impl_binops_multiplicative,
     impl_binops_multiplicative_mixed, impl_sub_binop_specify_output,
 };
 impl_binops_additive!(Fr, Fr);
 impl_binops_multiplicative!(Fr, Fr);
+#[cfg(not(feature = "asm"))]
 field_common!(
     Fr,
     MODULUS,
@@ -139,7 +141,19 @@ field_common!(
 #[cfg(not(feature = "asm"))]
 field_arithmetic!(Fr, MODULUS, INV, sparse);
 #[cfg(feature = "asm")]
-field_arithmetic_asm!(Fr, MODULUS, INV);
+assembly_field!(
+    Fr,
+    MODULUS,
+    INV,
+    MODULUS_STR,
+    TWO_INV,
+    ROOT_OF_UNITY_INV,
+    DELTA,
+    ZETA,
+    R,
+    R2,
+    R3
+);
 
 impl ff::Field for Fr {
     fn random(mut rng: impl RngCore) -> Self {
@@ -167,6 +181,10 @@ impl ff::Field for Fr {
         self.double()
     }
 
+    fn is_zero_vartime(&self) -> bool {
+        self == &Self::zero()
+    }
+
     #[inline(always)]
     fn square(&self) -> Self {
         self.square()
@@ -174,7 +192,7 @@ impl ff::Field for Fr {
 
     /// Computes the square root of this element, if it exists.
     fn sqrt(&self) -> CtOption<Self> {
-        crate::arithmetic::sqrt_tonelli_shanks(self, &<Self as SqrtRatio>::T_MINUS1_OVER2)
+        crate::arithmetic::sqrt_tonelli_shanks(self, <Self as SqrtRatio>::T_MINUS1_OVER2)
     }
 
     /// Computes the multiplicative inverse of this element,
@@ -207,7 +225,7 @@ impl ff::PrimeField for Fr {
         tmp.0[3] = u64::from_le_bytes(repr[24..32].try_into().unwrap());
 
         // Try to subtract the modulus
-        let (_, borrow) = sbb(tmp.0[0], MODULUS.0[0], 0);
+        let (_, borrow) = tmp.0[0].overflowing_sub(MODULUS.0[0]);
         let (_, borrow) = sbb(tmp.0[1], MODULUS.0[1], borrow);
         let (_, borrow) = sbb(tmp.0[2], MODULUS.0[2], borrow);
         let (_, borrow) = sbb(tmp.0[3], MODULUS.0[3], borrow);
@@ -227,7 +245,11 @@ impl ff::PrimeField for Fr {
     fn to_repr(&self) -> Self::Repr {
         // Turn into canonical form by computing
         // (a.R) / R = a
+        #[cfg(feature = "asm")]
         let tmp = Fr::montgomery_reduce(&[self.0[0], self.0[1], self.0[2], self.0[3], 0, 0, 0, 0]);
+
+        #[cfg(not(feature = "asm"))]
+        let tmp = Fr::montgomery_reduce_short(self.0[0], self.0[1], self.0[2], self.0[3]);
 
         let mut res = [0; 32];
         res[0..8].copy_from_slice(&tmp.0[0].to_le_bytes());
@@ -261,21 +283,36 @@ impl SqrtRatio for Fr {
     ];
 
     fn get_lower_32(&self) -> u32 {
+        #[cfg(not(feature = "asm"))]
+        let tmp = Fr::montgomery_reduce_short(self.0[0], self.0[1], self.0[2], self.0[3]);
+
+        #[cfg(feature = "asm")]
         let tmp = Fr::montgomery_reduce(&[self.0[0], self.0[1], self.0[2], self.0[3], 0, 0, 0, 0]);
+
         tmp.0[0] as u32
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::serde::SerdeObject;
-
     use super::*;
-    use ark_std::{end_timer, start_timer};
     use ff::Field;
     use rand::SeedableRng;
     use rand_core::OsRng;
     use rand_xorshift::XorShiftRng;
+
+    #[test]
+    fn test_ser() {
+        let mut rng = XorShiftRng::from_seed([
+            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+            0xbc, 0xe5,
+        ]);
+
+        let a0 = Fr::random(&mut rng);
+        let a_bytes = a0.to_bytes();
+        let a1 = Fr::from_bytes(&a_bytes).unwrap();
+        assert_eq!(a0, a1);
+    }
 
     #[test]
     fn test_sqrt() {
@@ -298,7 +335,7 @@ mod test {
     #[test]
     fn test_root_of_unity() {
         assert_eq!(
-            Fr::root_of_unity().pow_vartime(&[1 << Fr::S, 0, 0, 0]),
+            Fr::root_of_unity().pow_vartime([1 << Fr::S, 0, 0, 0]),
             Fr::one()
         );
     }
@@ -347,49 +384,5 @@ mod test {
     #[test]
     fn test_serialization() {
         crate::tests::field::random_serialization_test::<Fr>("fr".to_string());
-    }
-
-    fn is_less_than(x: &[u64; 4], y: &[u64; 4]) -> bool {
-        match x[3].cmp(&y[3]) {
-            core::cmp::Ordering::Less => return true,
-            core::cmp::Ordering::Greater => return false,
-            _ => {}
-        }
-        match x[2].cmp(&y[2]) {
-            core::cmp::Ordering::Less => return true,
-            core::cmp::Ordering::Greater => return false,
-            _ => {}
-        }
-        match x[1].cmp(&y[1]) {
-            core::cmp::Ordering::Less => return true,
-            core::cmp::Ordering::Greater => return false,
-            _ => {}
-        }
-        x[0].lt(&y[0])
-    }
-
-    #[test]
-    fn test_serialization_check() {
-        let mut rng = XorShiftRng::from_seed([
-            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
-            0xbc, 0xe5,
-        ]);
-        let message = "serialization fr";
-        let start = start_timer!(|| message);
-        // failure check
-        for _ in 0..1000000 {
-            let rand_word = [(); 4].map(|_| rng.next_u64());
-            let a = Fr(rand_word);
-            let rand_bytes = a.to_raw_bytes();
-            match is_less_than(&rand_word, &MODULUS.0) {
-                false => {
-                    assert!(Fr::from_raw_bytes(&rand_bytes).is_none());
-                }
-                _ => {
-                    assert_eq!(Fr::from_raw_bytes(&rand_bytes), Some(a));
-                }
-            }
-        }
-        end_timer!(start);
     }
 }

@@ -16,6 +16,17 @@ pub fn curve_tests<G: CurveExt>() {
     serdes::<G>();
 }
 
+pub fn curve_tests_bls12_381<G: CurveExt>() {
+    is_on_curve::<G>();
+    equality::<G>();
+    projective_to_affine_affine_to_projective::<G>();
+    projective_addition::<G>();
+    mixed_addition::<G>();
+    multiplication::<G>();
+    batch_normalize::<G>();
+    // serdes::<G>();  // TODO [TEST] [serde] Add support for BLS12_381 G1 & G2
+}
+
 fn serdes<G: CurveExt>() {
     for _ in 0..100 {
         let projective_point = G::random(OsRng);
@@ -86,8 +97,8 @@ fn equality<G: CurveExt>() {
     let a = G::generator();
     let b = G::identity();
 
-    assert!(a == a);
-    assert!(b == b);
+    assert!(a.eq(&a));
+    assert!(b.eq(&b));
     assert!(a != b);
     assert!(b != a);
 
@@ -95,16 +106,16 @@ fn equality<G: CurveExt>() {
         let a = G::random(OsRng);
         let b = G::random(OsRng);
 
-        assert!(a == a);
-        assert!(b == b);
+        assert!(a.eq(&a));
+        assert!(b.eq(&b));
         assert!(a != b);
         assert!(b != a);
 
         let a: G::AffineExt = a.into();
         let b: G::AffineExt = b.into();
 
-        assert!(a == a);
-        assert!(b == b);
+        assert!(a.eq(&a));
+        assert!(b.eq(&b));
         assert!(a != b);
         assert!(b != a);
     }
@@ -164,7 +175,7 @@ fn projective_addition<G: CurveExt>() {
     let a = G::random(OsRng);
     let b = G::random(OsRng);
     let c = G::random(OsRng);
-    assert!(a + b == b + a);
+    assert!((a + b).eq(&(b + a)));
     assert!(a - b == -(b - a));
     assert!(c + (a + b) == a + (c + b));
     assert!((a - b) - c == (a - c) - b);

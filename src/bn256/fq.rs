@@ -1,11 +1,10 @@
 #[cfg(feature = "asm")]
-use super::assembly::field_arithmetic_asm;
-#[cfg(not(feature = "asm"))]
-use crate::{field_arithmetic, field_specific};
+use super::assembly::assembly_field;
 
 use super::LegendreSymbol;
-use crate::arithmetic::{adc, mac, sbb};
+use crate::arithmetic::{adc, mac, macx, sbb};
 use pasta_curves::arithmetic::{FieldExt, Group, SqrtRatio};
+use serde::{Deserialize, Serialize};
 
 use core::convert::TryInto;
 use core::fmt;
@@ -22,12 +21,12 @@ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 // The internal representation of this type is four 64-bit unsigned
 // integers in little-endian order. `Fq` values are always in
 // Montgomery form; i.e., Fq(a) = aR mod q, with R = 2^256.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Fq(pub(crate) [u64; 4]);
 
 /// Constant representing the modulus
 /// q = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47
-pub const MODULUS: Fq = Fq([
+const MODULUS: Fq = Fq([
     0x3c208c16d87cfd47,
     0x97816a916871ca8d,
     0xb85045b68181585d,
@@ -92,12 +91,13 @@ const ZETA: Fq = Fq::from_raw([
 ]);
 
 use crate::{
-    field_common, impl_add_binop_specify_output, impl_binops_additive,
-    impl_binops_additive_specify_output, impl_binops_multiplicative,
+    field_arithmetic, field_common, field_specific, impl_add_binop_specify_output,
+    impl_binops_additive, impl_binops_additive_specify_output, impl_binops_multiplicative,
     impl_binops_multiplicative_mixed, impl_sub_binop_specify_output,
 };
 impl_binops_additive!(Fq, Fq);
 impl_binops_multiplicative!(Fq, Fq);
+#[cfg(not(feature = "asm"))]
 field_common!(
     Fq,
     MODULUS,
@@ -114,7 +114,19 @@ field_common!(
 #[cfg(not(feature = "asm"))]
 field_arithmetic!(Fq, MODULUS, INV, sparse);
 #[cfg(feature = "asm")]
-field_arithmetic_asm!(Fq, MODULUS, INV);
+assembly_field!(
+    Fq,
+    MODULUS,
+    INV,
+    MODULUS_STR,
+    TWO_INV,
+    ROOT_OF_UNITY_INV,
+    DELTA,
+    ZETA,
+    R,
+    R2,
+    R3
+);
 
 impl Fq {
     pub const fn size() -> usize {
@@ -149,10 +161,12 @@ impl ff::Field for Fq {
         Self::from_bytes_wide(&random_bytes)
     }
 
+    #[inline(always)]
     fn zero() -> Self {
         Self::zero()
     }
 
+    #[inline(always)]
     fn one() -> Self {
         Self::one()
     }
@@ -209,7 +223,7 @@ impl ff::PrimeField for Fq {
         tmp.0[3] = u64::from_le_bytes(repr[24..32].try_into().unwrap());
 
         // Try to subtract the modulus
-        let (_, borrow) = sbb(tmp.0[0], MODULUS.0[0], 0);
+        let (_, borrow) = tmp.0[0].overflowing_sub(MODULUS.0[0]);
         let (_, borrow) = sbb(tmp.0[1], MODULUS.0[1], borrow);
         let (_, borrow) = sbb(tmp.0[2], MODULUS.0[2], borrow);
         let (_, borrow) = sbb(tmp.0[3], MODULUS.0[3], borrow);
@@ -229,8 +243,12 @@ impl ff::PrimeField for Fq {
     fn to_repr(&self) -> Self::Repr {
         // Turn into canonical form by computing
         // (a.R) / R = a
+        #[cfg(feature = "asm")]
         let tmp =
             Self::montgomery_reduce(&[self.0[0], self.0[1], self.0[2], self.0[3], 0, 0, 0, 0]);
+
+        #[cfg(not(feature = "asm"))]
+        let tmp = Self::montgomery_reduce_short(self.0[0], self.0[1], self.0[2], self.0[3]);
 
         let mut res = [0; 32];
         res[0..8].copy_from_slice(&tmp.0[0].to_le_bytes());
@@ -258,6 +276,10 @@ impl SqrtRatio for Fq {
     const T_MINUS1_OVER2: [u64; 4] = [0, 0, 0, 0];
 
     fn get_lower_32(&self) -> u32 {
+        #[cfg(not(feature = "asm"))]
+        let tmp = Fq::montgomery_reduce_short(self.0[0], self.0[1], self.0[2], self.0[3]);
+
+        #[cfg(feature = "asm")]
         let tmp = Fq::montgomery_reduce(&[self.0[0], self.0[1], self.0[2], self.0[3], 0, 0, 0, 0]);
 
         tmp.0[0] as u32
@@ -268,7 +290,21 @@ impl SqrtRatio for Fq {
 mod test {
     use super::*;
     use ff::Field;
-    use rand_core::OsRng;
+    use rand_core::{OsRng, SeedableRng};
+    use rand_xorshift::XorShiftRng;
+
+    #[test]
+    fn test_ser() {
+        let mut rng = XorShiftRng::from_seed([
+            0x59, 0x62, 0xbe, 0x5d, 0x76, 0x3d, 0x31, 0x8d, 0x17, 0xdb, 0x37, 0x32, 0x54, 0x06,
+            0xbc, 0xe5,
+        ]);
+
+        let a0 = Fq::random(&mut rng);
+        let a_bytes = a0.to_bytes();
+        let a1 = Fq::from_bytes(&a_bytes).unwrap();
+        assert_eq!(a0, a1);
+    }
 
     #[test]
     fn test_sqrt_fq() {

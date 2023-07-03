@@ -49,74 +49,7 @@ macro_rules! field_common {
             /// Converts from an integer represented in little endian
             /// into its (congruent) `$field` representation.
             pub const fn from_raw(val: [u64; 4]) -> Self {
-                #[cfg(feature = "asm")]
-                {
-                    let (r0, carry) = mac(0, val[0], $r2.0[0], 0);
-                    let (r1, carry) = mac(0, val[0], $r2.0[1], carry);
-                    let (r2, carry) = mac(0, val[0], $r2.0[2], carry);
-                    let (r3, r4) = mac(0, val[0], $r2.0[3], carry);
-
-                    let (r1, carry) = mac(r1, val[1], $r2.0[0], 0);
-                    let (r2, carry) = mac(r2, val[1], $r2.0[1], carry);
-                    let (r3, carry) = mac(r3, val[1], $r2.0[2], carry);
-                    let (r4, r5) = mac(r4, val[1], $r2.0[3], carry);
-
-                    let (r2, carry) = mac(r2, val[2], $r2.0[0], 0);
-                    let (r3, carry) = mac(r3, val[2], $r2.0[1], carry);
-                    let (r4, carry) = mac(r4, val[2], $r2.0[2], carry);
-                    let (r5, r6) = mac(r5, val[2], $r2.0[3], carry);
-
-                    let (r3, carry) = mac(r3, val[3], $r2.0[0], 0);
-                    let (r4, carry) = mac(r4, val[3], $r2.0[1], carry);
-                    let (r5, carry) = mac(r5, val[3], $r2.0[2], carry);
-                    let (r6, r7) = mac(r6, val[3], $r2.0[3], carry);
-
-                    // Montgomery reduction (first part)
-                    let k = r0.wrapping_mul($inv);
-                    let (_, carry) = mac(r0, k, $modulus.0[0], 0);
-                    let (r1, carry) = mac(r1, k, $modulus.0[1], carry);
-                    let (r2, carry) = mac(r2, k, $modulus.0[2], carry);
-                    let (r3, carry) = mac(r3, k, $modulus.0[3], carry);
-                    let (r4, carry2) = adc(r4, 0, carry);
-
-                    let k = r1.wrapping_mul($inv);
-                    let (_, carry) = mac(r1, k, $modulus.0[0], 0);
-                    let (r2, carry) = mac(r2, k, $modulus.0[1], carry);
-                    let (r3, carry) = mac(r3, k, $modulus.0[2], carry);
-                    let (r4, carry) = mac(r4, k, $modulus.0[3], carry);
-                    let (r5, carry2) = adc(r5, carry2, carry);
-
-                    let k = r2.wrapping_mul($inv);
-                    let (_, carry) = mac(r2, k, $modulus.0[0], 0);
-                    let (r3, carry) = mac(r3, k, $modulus.0[1], carry);
-                    let (r4, carry) = mac(r4, k, $modulus.0[2], carry);
-                    let (r5, carry) = mac(r5, k, $modulus.0[3], carry);
-                    let (r6, carry2) = adc(r6, carry2, carry);
-
-                    let k = r3.wrapping_mul($inv);
-                    let (_, carry) = mac(r3, k, $modulus.0[0], 0);
-                    let (r4, carry) = mac(r4, k, $modulus.0[1], carry);
-                    let (r5, carry) = mac(r5, k, $modulus.0[2], carry);
-                    let (r6, carry) = mac(r6, k, $modulus.0[3], carry);
-                    let (r7, _) = adc(r7, carry2, carry);
-
-                    // Montgomery reduction (sub part)
-                    let (d0, borrow) = sbb(r4, $modulus.0[0], 0);
-                    let (d1, borrow) = sbb(r5, $modulus.0[1], borrow);
-                    let (d2, borrow) = sbb(r6, $modulus.0[2], borrow);
-                    let (d3, borrow) = sbb(r7, $modulus.0[3], borrow);
-
-                    let (d0, carry) = adc(d0, $modulus.0[0] & borrow, 0);
-                    let (d1, carry) = adc(d1, $modulus.0[1] & borrow, carry);
-                    let (d2, carry) = adc(d2, $modulus.0[2] & borrow, carry);
-                    let (d3, _) = adc(d3, $modulus.0[3] & borrow, carry);
-
-                    $field([d0, d1, d2, d3])
-                }
-                #[cfg(not(feature = "asm"))]
-                {
-                    (&$field(val)).mul(&$r2)
-                }
+                (&$field(val)).mul(&$r2)
             }
 
             /// Attempts to convert a little-endian byte representation of
@@ -129,16 +62,6 @@ macro_rules! field_common {
             /// little-endian byte order.
             pub fn to_bytes(&self) -> [u8; 32] {
                 <Self as ff::PrimeField>::to_repr(self)
-            }
-
-            /// Lexicographic comparison of Montgomery forms.
-            #[inline(always)]
-            const fn is_less_than(x: &[u64; 4], y: &[u64; 4]) -> bool {
-                let (_, borrow) = sbb(x[0], y[0], 0);
-                let (_, borrow) = sbb(x[1], y[1], borrow);
-                let (_, borrow) = sbb(x[2], y[2], borrow);
-                let (_, borrow) = sbb(x[3], y[3], borrow);
-                borrow >> 63 == 1
             }
         }
 
@@ -279,6 +202,28 @@ macro_rules! field_common {
             }
         }
 
+        impl From<[u64; 4]> for $field {
+            fn from(digits: [u64; 4]) -> Self {
+                Self::from_raw(digits)
+            }
+        }
+
+        impl From<$field> for [u64; 4] {
+            fn from(elt: $field) -> [u64; 4] {
+                // Turn into canonical form by computing
+                // (a.R) / R = a
+                #[cfg(feature = "asm")]
+                let tmp = $field::montgomery_reduce(&[
+                    elt.0[0], elt.0[1], elt.0[2], elt.0[3], 0, 0, 0, 0,
+                ]);
+
+                #[cfg(not(feature = "asm"))]
+                let tmp = $field::montgomery_reduce_short(elt.0[0], elt.0[1], elt.0[2], elt.0[3]);
+
+                tmp.0
+            }
+        }
+
         impl From<$field> for [u8; 32] {
             fn from(value: $field) -> [u8; 32] {
                 value.to_repr()
@@ -288,6 +233,21 @@ macro_rules! field_common {
         impl<'a> From<&'a $field> for [u8; 32] {
             fn from(value: &'a $field) -> [u8; 32] {
                 value.to_repr()
+            }
+        }
+
+        impl From<$field> for i128 {
+            fn from(value: $field) -> i128 {
+                let tmp: [u64; 4] = value.into();
+                if tmp[2] == 0 && tmp[3] == 0 {
+                    i128::from(tmp[0]) | (i128::from(tmp[1]) << 64)
+                } else {
+                    // modulus - tmp
+                    let (a0, borrow) = $modulus.0[0].overflowing_sub(tmp[0]);
+                    let (a1, _) = sbb($modulus.0[1], tmp[1], borrow);
+
+                    -(i128::from(a0) | (i128::from(a1) << 64))
+                }
             }
         }
 
@@ -318,9 +278,8 @@ macro_rules! field_common {
             }
 
             fn get_lower_128(&self) -> u128 {
-                let tmp = $field::montgomery_reduce(&[
-                    self.0[0], self.0[1], self.0[2], self.0[3], 0, 0, 0, 0,
-                ]);
+                let tmp =
+                    $field::montgomery_reduce_short(self.0[0], self.0[1], self.0[2], self.0[3]);
 
                 u128::from(tmp.0[0]) | (u128::from(tmp.0[1]) << 64)
             }
@@ -396,33 +355,291 @@ macro_rules! field_arithmetic {
             /// Squares this element.
             #[inline]
             pub const fn square(&self) -> $field {
-                let (r1, carry) = mac(0, self.0[0], self.0[1], 0);
-                let (r2, carry) = mac(0, self.0[0], self.0[2], carry);
-                let (r3, r4) = mac(0, self.0[0], self.0[3], carry);
+                let r0;
+                let mut r1;
+                let mut r2;
+                let mut r3;
+                let mut r4;
+                let mut r5;
+                let mut r6;
+                let mut r7;
+                let mut carry;
+                let mut carry2;
 
-                let (r3, carry) = mac(r3, self.0[1], self.0[2], 0);
-                let (r4, r5) = mac(r4, self.0[1], self.0[3], carry);
+                (r1, carry) = self.0[0].widening_mul(self.0[1]);
+                (r2, carry) = self.0[0].carrying_mul(self.0[2], carry);
+                (r3, r4) = self.0[0].carrying_mul(self.0[3], carry);
 
-                let (r5, r6) = mac(r5, self.0[2], self.0[3], 0);
+                (r3, carry) = macx(r3, self.0[1], self.0[2]);
+                (r4, r5) = mac(r4, self.0[1], self.0[3], carry);
 
-                let r7 = r6 >> 63;
-                let r6 = (r6 << 1) | (r5 >> 63);
-                let r5 = (r5 << 1) | (r4 >> 63);
-                let r4 = (r4 << 1) | (r3 >> 63);
-                let r3 = (r3 << 1) | (r2 >> 63);
-                let r2 = (r2 << 1) | (r1 >> 63);
-                let r1 = r1 << 1;
+                (r5, r6) = macx(r5, self.0[2], self.0[3]);
 
-                let (r0, carry) = mac(0, self.0[0], self.0[0], 0);
-                let (r1, carry) = adc(0, r1, carry);
-                let (r2, carry) = mac(r2, self.0[1], self.0[1], carry);
-                let (r3, carry) = adc(0, r3, carry);
-                let (r4, carry) = mac(r4, self.0[2], self.0[2], carry);
-                let (r5, carry) = adc(0, r5, carry);
-                let (r6, carry) = mac(r6, self.0[3], self.0[3], carry);
-                let (r7, _) = adc(0, r7, carry);
+                r7 = r6 >> 63;
+                r6 = (r6 << 1) | (r5 >> 63);
+                r5 = (r5 << 1) | (r4 >> 63);
+                r4 = (r4 << 1) | (r3 >> 63);
+                r3 = (r3 << 1) | (r2 >> 63);
+                r2 = (r2 << 1) | (r1 >> 63);
+                r1 <<= 1;
 
-                $field::montgomery_reduce(&[r0, r1, r2, r3, r4, r5, r6, r7])
+                (r0, carry) = self.0[0].widening_mul(self.0[0]);
+                (r1, carry2) = r1.overflowing_add(carry);
+                (r2, carry) = mac(r2, self.0[1], self.0[1], carry2 as u64);
+                (r3, carry2) = r3.overflowing_add(carry);
+                (r4, carry) = mac(r4, self.0[2], self.0[2], carry2 as u64);
+                (r5, carry2) = r5.overflowing_add(carry);
+                (r6, carry) = mac(r6, self.0[3], self.0[3], carry2 as u64);
+                r7 = r7.wrapping_add(carry);
+
+                $field::montgomery_reduce(r0, r1, r2, r3, r4, r5, r6, r7)
+            }
+
+            /// Subtracts `rhs` from `self`, returning the result.
+            #[inline]
+            pub const fn sub(&self, rhs: &Self) -> Self {
+                let (d0, borrow) = self.0[0].overflowing_sub(rhs.0[0]);
+                let (d1, borrow) = sbb(self.0[1], rhs.0[1], borrow);
+                let (d2, borrow) = sbb(self.0[2], rhs.0[2], borrow);
+                let (d3, borrow) = sbb(self.0[3], rhs.0[3], borrow);
+
+                let borrow = 0u64.wrapping_sub(borrow as u64);
+                // If underflow occurred on the final limb, borrow = 0xfff...fff, otherwise
+                // borrow = 0x000...000. Thus, we use it as a mask to conditionally add the modulus.
+                let (d0, carry) = d0.overflowing_add($modulus.0[0] & borrow);
+                let (d1, carry) = adc(d1, $modulus.0[1] & borrow, carry);
+                let (d2, carry) = adc(d2, $modulus.0[2] & borrow, carry);
+                let (d3, _) = adc(d3, $modulus.0[3] & borrow, carry);
+                $field([d0, d1, d2, d3])
+            }
+
+            /// Negates `self`.
+            #[inline]
+            pub const fn neg(&self) -> Self {
+                if self.0[0] == 0 && self.0[1] == 0 && self.0[2] == 0 && self.0[3] == 0 {
+                    return $field([0, 0, 0, 0]);
+                }
+                // Subtract `self` from `MODULUS` to negate. Ignore the final
+                // borrow because it cannot underflow; self is guaranteed to
+                // be in the field.
+                let (d0, borrow) = $modulus.0[0].overflowing_sub(self.0[0]);
+                let (d1, borrow) = sbb($modulus.0[1], self.0[1], borrow);
+                let (d2, borrow) = sbb($modulus.0[2], self.0[2], borrow);
+                let d3 = $modulus.0[3] - (self.0[3] + borrow as u64);
+
+                $field([d0, d1, d2, d3])
+            }
+
+            /// Montgomery reduce where last 4 registers are 0
+            #[inline(always)]
+            pub(crate) const fn montgomery_reduce_short(
+                mut r0: u64,
+                mut r1: u64,
+                mut r2: u64,
+                mut r3: u64,
+            ) -> $field {
+                // The Montgomery reduction here is based on Algorithm 14.32 in
+                // Handbook of Applied Cryptography
+                // <http://cacr.uwaterloo.ca/hac/about/chap14.pdf>.
+                let mut k;
+
+                k = r0.wrapping_mul($inv);
+                (_, r0) = macx(r0, k, $modulus.0[0]);
+                (r1, r0) = mac(r1, k, $modulus.0[1], r0);
+                (r2, r0) = mac(r2, k, $modulus.0[2], r0);
+                (r3, r0) = mac(r3, k, $modulus.0[3], r0);
+
+                k = r1.wrapping_mul($inv);
+                (_, r1) = macx(r1, k, $modulus.0[0]);
+                (r2, r1) = mac(r2, k, $modulus.0[1], r1);
+                (r3, r1) = mac(r3, k, $modulus.0[2], r1);
+                (r0, r1) = mac(r0, k, $modulus.0[3], r1);
+
+                k = r2.wrapping_mul($inv);
+                (_, r2) = macx(r2, k, $modulus.0[0]);
+                (r3, r2) = mac(r3, k, $modulus.0[1], r2);
+                (r0, r2) = mac(r0, k, $modulus.0[2], r2);
+                (r1, r2) = mac(r1, k, $modulus.0[3], r2);
+
+                k = r3.wrapping_mul($inv);
+                (_, r3) = macx(r3, k, $modulus.0[0]);
+                (r0, r3) = mac(r0, k, $modulus.0[1], r3);
+                (r1, r3) = mac(r1, k, $modulus.0[2], r3);
+                (r2, r3) = mac(r2, k, $modulus.0[3], r3);
+
+                // Result may be within MODULUS of the correct value
+                (&$field([r0, r1, r2, r3])).sub(&$modulus)
+            }
+
+            #[inline(always)]
+            fn is_less_than(x: &[u64; 4], y: &[u64; 4]) -> bool {
+                let (_, borrow) = x[0].overflowing_sub(y[0]);
+                let (_, borrow) = x[1].borrowing_sub(y[1], borrow);
+                let (_, borrow) = x[2].borrowing_sub(y[2], borrow);
+                let (_, borrow) = x[3].borrowing_sub(y[3], borrow);
+                borrow
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! field_specific {
+    ($field:ident, $modulus:ident, $inv:ident, sparse) => {
+        impl $field {
+            /// Adds `rhs` to `self`, returning the result.
+            #[inline]
+            pub const fn add(&self, rhs: &Self) -> Self {
+                let (d0, carry) = self.0[0].overflowing_add(rhs.0[0]);
+                let (d1, carry) = self.0[1].carrying_add(rhs.0[1], carry);
+                let (d2, carry) = self.0[2].carrying_add(rhs.0[2], carry);
+                // sparse means that the sum won't overflow the top register
+                let d3 = self.0[3] + rhs.0[3] + carry as u64;
+
+                // Attempt to subtract the modulus, to ensure the value
+                // is smaller than the modulus.
+                (&$field([d0, d1, d2, d3])).sub(&$modulus)
+            }
+
+            /// Multiplies `rhs` by `self`, returning the result.
+            #[inline]
+            pub const fn mul(&self, rhs: &Self) -> $field {
+                // When the highest bit in the top register of the modulus is 0 and the rest of the bits are not all 1, we can use an optimization from the gnark team: https://hackmd.io/@gnark/modular_multiplication
+
+                // I think this is exactly the same as the previous `mul` implementation with `montgomery_reduce` at the end (where `montgomery_reduce` is slightly cheaper in "sparse" setting)
+                // Maybe the use of mutable variables is slightly more efficient?
+                let mut r0;
+                let mut r1;
+                let mut t0;
+                let mut t1;
+                let mut t2;
+                let mut t3;
+                let mut k;
+
+                (t0, r0) = self.0[0].widening_mul(rhs.0[0]);
+                k = t0.wrapping_mul($inv);
+                (_, r1) = macx(t0, k, $modulus.0[0]);
+                (t1, r0) = self.0[0].carrying_mul(rhs.0[1], r0);
+                (t0, r1) = mac(t1, k, $modulus.0[1], r1);
+                (t2, r0) = self.0[0].carrying_mul(rhs.0[2], r0);
+                (t1, r1) = mac(t2, k, $modulus.0[2], r1);
+                (t3, r0) = self.0[0].carrying_mul(rhs.0[3], r0);
+                (t2, r1) = mac(t3, k, $modulus.0[3], r1);
+                t3 = r0 + r1;
+
+                (t0, r0) = macx(t0, self.0[1], rhs.0[0]);
+                k = t0.wrapping_mul($inv);
+                (_, r1) = macx(t0, k, $modulus.0[0]);
+                (t1, r0) = mac(t1, self.0[1], rhs.0[1], r0);
+                (t0, r1) = mac(t1, k, $modulus.0[1], r1);
+                (t2, r0) = mac(t2, self.0[1], rhs.0[2], r0);
+                (t1, r1) = mac(t2, k, $modulus.0[2], r1);
+                (t3, r0) = mac(t3, self.0[1], rhs.0[3], r0);
+                (t2, r1) = mac(t3, k, $modulus.0[3], r1);
+                t3 = r0 + r1;
+
+                (t0, r0) = macx(t0, self.0[2], rhs.0[0]);
+                k = t0.wrapping_mul($inv);
+                (_, r1) = macx(t0, k, $modulus.0[0]);
+                (t1, r0) = mac(t1, self.0[2], rhs.0[1], r0);
+                (t0, r1) = mac(t1, k, $modulus.0[1], r1);
+                (t2, r0) = mac(t2, self.0[2], rhs.0[2], r0);
+                (t1, r1) = mac(t2, k, $modulus.0[2], r1);
+                (t3, r0) = mac(t3, self.0[2], rhs.0[3], r0);
+                (t2, r1) = mac(t3, k, $modulus.0[3], r1);
+                t3 = r0 + r1;
+
+                (t0, r0) = macx(t0, self.0[3], rhs.0[0]);
+                k = t0.wrapping_mul($inv);
+                (_, r1) = macx(t0, k, $modulus.0[0]);
+                (t1, r0) = mac(t1, self.0[3], rhs.0[1], r0);
+                (t0, r1) = mac(t1, k, $modulus.0[1], r1);
+                (t2, r0) = mac(t2, self.0[3], rhs.0[2], r0);
+                (t1, r1) = mac(t2, k, $modulus.0[2], r1);
+                (t3, r0) = mac(t3, self.0[3], rhs.0[3], r0);
+                (t2, r1) = mac(t3, k, $modulus.0[3], r1);
+                t3 = r0 + r1;
+
+                // Result may be within MODULUS of the correct value
+                (&$field([t0, t1, t2, t3])).sub(&$modulus)
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            #[inline(always)]
+            pub(crate) const fn montgomery_reduce(
+                r0: u64,
+                mut r1: u64,
+                mut r2: u64,
+                mut r3: u64,
+                mut r4: u64,
+                mut r5: u64,
+                mut r6: u64,
+                mut r7: u64,
+            ) -> $field {
+                // The Montgomery reduction here is based on Algorithm 14.32 in
+                // Handbook of Applied Cryptography
+                // <http://cacr.uwaterloo.ca/hac/about/chap14.pdf>.
+                let mut k;
+                let mut carry;
+                let mut carry2;
+
+                k = r0.wrapping_mul($inv);
+                (_, carry) = macx(r0, k, $modulus.0[0]);
+                (r1, carry) = mac(r1, k, $modulus.0[1], carry);
+                (r2, carry) = mac(r2, k, $modulus.0[2], carry);
+                (r3, carry) = mac(r3, k, $modulus.0[3], carry);
+                (r4, carry2) = r4.overflowing_add(carry);
+
+                k = r1.wrapping_mul($inv);
+                (_, carry) = macx(r1, k, $modulus.0[0]);
+                (r2, carry) = mac(r2, k, $modulus.0[1], carry);
+                (r3, carry) = mac(r3, k, $modulus.0[2], carry);
+                (r4, carry) = mac(r4, k, $modulus.0[3], carry);
+                (r5, carry2) = adc(r5, carry, carry2);
+
+                k = r2.wrapping_mul($inv);
+                (_, carry) = macx(r2, k, $modulus.0[0]);
+                (r3, carry) = mac(r3, k, $modulus.0[1], carry);
+                (r4, carry) = mac(r4, k, $modulus.0[2], carry);
+                (r5, carry) = mac(r5, k, $modulus.0[3], carry);
+                (r6, carry2) = adc(r6, carry, carry2);
+
+                k = r3.wrapping_mul($inv);
+                (_, carry) = macx(r3, k, $modulus.0[0]);
+                (r4, carry) = mac(r4, k, $modulus.0[1], carry);
+                (r5, carry) = mac(r5, k, $modulus.0[2], carry);
+                (r6, carry) = mac(r6, k, $modulus.0[3], carry);
+                (r7, _) = adc(r7, carry, carry2);
+
+                // Result may be within MODULUS of the correct value
+                (&$field([r4, r5, r6, r7])).sub(&$modulus)
+            }
+        }
+    };
+    ($field:ident, $modulus:ident, $inv:ident, dense) => {
+        impl $field {
+            /// Adds `rhs` to `self`, returning the result.
+            #[inline]
+            pub const fn add(&self, rhs: &Self) -> Self {
+                let (d0, carry) = self.0[0].overflowing_add(rhs.0[0]);
+                let (d1, carry) = adc(self.0[1], rhs.0[1], carry);
+                let (d2, carry) = adc(self.0[2], rhs.0[2], carry);
+                let (d3, carry) = adc(self.0[3], rhs.0[3], carry);
+
+                // Attempt to subtract the modulus, to ensure the value
+                // is smaller than the modulus.
+                let (d0, borrow) = d0.overflowing_sub($modulus.0[0]);
+                let (d1, borrow) = sbb(d1, $modulus.0[1], borrow);
+                let (d2, borrow) = sbb(d2, $modulus.0[2], borrow);
+                let (d3, borrow) = sbb(d3, $modulus.0[3], borrow);
+                let borrow = (carry as u64).wrapping_sub(borrow as u64);
+
+                let (d0, carry) = d0.overflowing_add($modulus.0[0] & borrow);
+                let (d1, carry) = adc(d1, $modulus.0[1] & borrow, carry);
+                let (d2, carry) = adc(d2, $modulus.0[2] & borrow, carry);
+                let (d3, _) = adc(d3, $modulus.0[3] & borrow, carry);
+
+                $field([d0, d1, d2, d3])
             }
 
             /// Multiplies `rhs` by `self`, returning the result.
@@ -450,178 +667,69 @@ macro_rules! field_arithmetic {
                 let (r5, carry) = mac(r5, self.0[3], rhs.0[2], carry);
                 let (r6, r7) = mac(r6, self.0[3], rhs.0[3], carry);
 
-                $field::montgomery_reduce(&[r0, r1, r2, r3, r4, r5, r6, r7])
+                $field::montgomery_reduce(r0, r1, r2, r3, r4, r5, r6, r7)
             }
 
-            /// Subtracts `rhs` from `self`, returning the result.
-            #[inline]
-            pub const fn sub(&self, rhs: &Self) -> Self {
-                let (d0, borrow) = sbb(self.0[0], rhs.0[0], 0);
-                let (d1, borrow) = sbb(self.0[1], rhs.0[1], borrow);
-                let (d2, borrow) = sbb(self.0[2], rhs.0[2], borrow);
-                let (d3, borrow) = sbb(self.0[3], rhs.0[3], borrow);
-
-                // If underflow occurred on the final limb, borrow = 0xfff...fff, otherwise
-                // borrow = 0x000...000. Thus, we use it as a mask to conditionally add the modulus.
-                let (d0, carry) = adc(d0, $modulus.0[0] & borrow, 0);
-                let (d1, carry) = adc(d1, $modulus.0[1] & borrow, carry);
-                let (d2, carry) = adc(d2, $modulus.0[2] & borrow, carry);
-                let (d3, _) = adc(d3, $modulus.0[3] & borrow, carry);
-
-                $field([d0, d1, d2, d3])
-            }
-
-            /// Negates `self`.
-            #[inline]
-            pub const fn neg(&self) -> Self {
-                // Subtract `self` from `MODULUS` to negate. Ignore the final
-                // borrow because it cannot underflow; self is guaranteed to
-                // be in the field.
-                let (d0, borrow) = sbb($modulus.0[0], self.0[0], 0);
-                let (d1, borrow) = sbb($modulus.0[1], self.0[1], borrow);
-                let (d2, borrow) = sbb($modulus.0[2], self.0[2], borrow);
-                let (d3, _) = sbb($modulus.0[3], self.0[3], borrow);
-
-                // `tmp` could be `MODULUS` if `self` was zero. Create a mask that is
-                // zero if `self` was zero, and `u64::max_value()` if self was nonzero.
-                let mask =
-                    (((self.0[0] | self.0[1] | self.0[2] | self.0[3]) == 0) as u64).wrapping_sub(1);
-
-                $field([d0 & mask, d1 & mask, d2 & mask, d3 & mask])
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! field_specific {
-    ($field:ident, $modulus:ident, $inv:ident, sparse) => {
-        impl $field {
-            /// Adds `rhs` to `self`, returning the result.
-            #[inline]
-            pub const fn add(&self, rhs: &Self) -> Self {
-                let (d0, carry) = adc(self.0[0], rhs.0[0], 0);
-                let (d1, carry) = adc(self.0[1], rhs.0[1], carry);
-                let (d2, carry) = adc(self.0[2], rhs.0[2], carry);
-                let (d3, _) = adc(self.0[3], rhs.0[3], carry);
-
-                // Attempt to subtract the modulus, to ensure the value
-                // is smaller than the modulus.
-                (&$field([d0, d1, d2, d3])).sub(&$modulus)
-            }
-
+            #[allow(clippy::too_many_arguments)]
             #[inline(always)]
-            pub(crate) const fn montgomery_reduce(r: &[u64; 8]) -> $field {
+            pub(crate) const fn montgomery_reduce(
+                r0: u64,
+                mut r1: u64,
+                mut r2: u64,
+                mut r3: u64,
+                mut r4: u64,
+                mut r5: u64,
+                mut r6: u64,
+                mut r7: u64,
+            ) -> Self {
                 // The Montgomery reduction here is based on Algorithm 14.32 in
                 // Handbook of Applied Cryptography
                 // <http://cacr.uwaterloo.ca/hac/about/chap14.pdf>.
+                let mut k;
+                let mut carry;
+                let mut carry2;
 
-                let k = r[0].wrapping_mul($inv);
-                let (_, carry) = mac(r[0], k, $modulus.0[0], 0);
-                let (r1, carry) = mac(r[1], k, $modulus.0[1], carry);
-                let (r2, carry) = mac(r[2], k, $modulus.0[2], carry);
-                let (r3, carry) = mac(r[3], k, $modulus.0[3], carry);
-                let (r4, carry2) = adc(r[4], 0, carry);
+                k = r0.wrapping_mul($inv);
+                (_, carry) = macx(r0, k, $modulus.0[0]);
+                (r1, carry) = mac(r1, k, $modulus.0[1], carry);
+                (r2, carry) = mac(r2, k, $modulus.0[2], carry);
+                (r3, carry) = mac(r3, k, $modulus.0[3], carry);
+                (r4, carry2) = r4.overflowing_add(carry);
 
-                let k = r1.wrapping_mul($inv);
-                let (_, carry) = mac(r1, k, $modulus.0[0], 0);
-                let (r2, carry) = mac(r2, k, $modulus.0[1], carry);
-                let (r3, carry) = mac(r3, k, $modulus.0[2], carry);
-                let (r4, carry) = mac(r4, k, $modulus.0[3], carry);
-                let (r5, carry2) = adc(r[5], carry2, carry);
+                k = r1.wrapping_mul($inv);
+                (_, carry) = k.carrying_mul($modulus.0[0], r1);
+                (r2, carry) = mac(r2, k, $modulus.0[1], carry);
+                (r3, carry) = mac(r3, k, $modulus.0[2], carry);
+                (r4, carry) = mac(r4, k, $modulus.0[3], carry);
+                (r5, carry2) = adc(r5, carry, carry2);
 
-                let k = r2.wrapping_mul($inv);
-                let (_, carry) = mac(r2, k, $modulus.0[0], 0);
-                let (r3, carry) = mac(r3, k, $modulus.0[1], carry);
-                let (r4, carry) = mac(r4, k, $modulus.0[2], carry);
-                let (r5, carry) = mac(r5, k, $modulus.0[3], carry);
-                let (r6, carry2) = adc(r[6], carry2, carry);
+                k = r2.wrapping_mul($inv);
+                (_, carry) = macx(r2, k, $modulus.0[0]);
+                (r3, carry) = mac(r3, k, $modulus.0[1], carry);
+                (r4, carry) = mac(r4, k, $modulus.0[2], carry);
+                (r5, carry) = mac(r5, k, $modulus.0[3], carry);
+                (r6, carry2) = adc(r6, carry, carry2);
 
-                let k = r3.wrapping_mul($inv);
-                let (_, carry) = mac(r3, k, $modulus.0[0], 0);
-                let (r4, carry) = mac(r4, k, $modulus.0[1], carry);
-                let (r5, carry) = mac(r5, k, $modulus.0[2], carry);
-                let (r6, carry) = mac(r6, k, $modulus.0[3], carry);
-                let (r7, _) = adc(r[7], carry2, carry);
-
-                // Result may be within MODULUS of the correct value
-                (&$field([r4, r5, r6, r7])).sub(&$modulus)
-            }
-        }
-    };
-    ($field:ident, $modulus:ident, $inv:ident, dense) => {
-        impl $field {
-            /// Adds `rhs` to `self`, returning the result.
-            #[inline]
-            pub const fn add(&self, rhs: &Self) -> Self {
-                let (d0, carry) = adc(self.0[0], rhs.0[0], 0);
-                let (d1, carry) = adc(self.0[1], rhs.0[1], carry);
-                let (d2, carry) = adc(self.0[2], rhs.0[2], carry);
-                let (d3, carry) = adc(self.0[3], rhs.0[3], carry);
-
-                // Attempt to subtract the modulus, to ensure the value
-                // is smaller than the modulus.
-                let (d0, borrow) = sbb(d0, $modulus.0[0], 0);
-                let (d1, borrow) = sbb(d1, $modulus.0[1], borrow);
-                let (d2, borrow) = sbb(d2, $modulus.0[2], borrow);
-                let (d3, borrow) = sbb(d3, $modulus.0[3], borrow);
-                let (_, borrow) = sbb(carry, 0, borrow);
-
-                let (d0, carry) = adc(d0, $modulus.0[0] & borrow, 0);
-                let (d1, carry) = adc(d1, $modulus.0[1] & borrow, carry);
-                let (d2, carry) = adc(d2, $modulus.0[2] & borrow, carry);
-                let (d3, _) = adc(d3, $modulus.0[3] & borrow, carry);
-
-                $field([d0, d1, d2, d3])
-            }
-
-            #[inline(always)]
-            pub(crate) const fn montgomery_reduce(r: &[u64; 8]) -> Self {
-                // The Montgomery reduction here is based on Algorithm 14.32 in
-                // Handbook of Applied Cryptography
-                // <http://cacr.uwaterloo.ca/hac/about/chap14.pdf>.
-
-                let k = r[0].wrapping_mul($inv);
-                let (_, carry) = mac(r[0], k, $modulus.0[0], 0);
-                let (r1, carry) = mac(r[1], k, $modulus.0[1], carry);
-                let (r2, carry) = mac(r[2], k, $modulus.0[2], carry);
-                let (r3, carry) = mac(r[3], k, $modulus.0[3], carry);
-                let (r4, carry2) = adc(r[4], 0, carry);
-
-                let k = r1.wrapping_mul($inv);
-                let (_, carry) = mac(r1, k, $modulus.0[0], 0);
-                let (r2, carry) = mac(r2, k, $modulus.0[1], carry);
-                let (r3, carry) = mac(r3, k, $modulus.0[2], carry);
-                let (r4, carry) = mac(r4, k, $modulus.0[3], carry);
-                let (r5, carry2) = adc(r[5], carry2, carry);
-
-                let k = r2.wrapping_mul($inv);
-                let (_, carry) = mac(r2, k, $modulus.0[0], 0);
-                let (r3, carry) = mac(r3, k, $modulus.0[1], carry);
-                let (r4, carry) = mac(r4, k, $modulus.0[2], carry);
-                let (r5, carry) = mac(r5, k, $modulus.0[3], carry);
-                let (r6, carry2) = adc(r[6], carry2, carry);
-
-                let k = r3.wrapping_mul($inv);
-                let (_, carry) = mac(r3, k, $modulus.0[0], 0);
-                let (r4, carry) = mac(r4, k, $modulus.0[1], carry);
-                let (r5, carry) = mac(r5, k, $modulus.0[2], carry);
-                let (r6, carry) = mac(r6, k, $modulus.0[3], carry);
-                let (r7, carry2) = adc(r[7], carry2, carry);
+                k = r3.wrapping_mul($inv);
+                (_, carry) = macx(r3, k, $modulus.0[0]);
+                (r4, carry) = mac(r4, k, $modulus.0[1], carry);
+                (r5, carry) = mac(r5, k, $modulus.0[2], carry);
+                (r6, carry) = mac(r6, k, $modulus.0[3], carry);
+                (r7, carry2) = adc(r7, carry, carry2);
 
                 // Result may be within MODULUS of the correct value
-                let (d0, borrow) = sbb(r4, $modulus.0[0], 0);
-                let (d1, borrow) = sbb(r5, $modulus.0[1], borrow);
-                let (d2, borrow) = sbb(r6, $modulus.0[2], borrow);
-                let (d3, borrow) = sbb(r7, $modulus.0[3], borrow);
-                let (_, borrow) = sbb(carry2, 0, borrow);
+                let mut borrow;
+                (r4, borrow) = r4.overflowing_sub($modulus.0[0]);
+                (r5, borrow) = sbb(r5, $modulus.0[1], borrow);
+                (r6, borrow) = sbb(r6, $modulus.0[2], borrow);
+                (r7, borrow) = sbb(r7, $modulus.0[3], borrow);
+                let borrow = (carry2 as u64).wrapping_sub(borrow as u64);
 
-                let (d0, carry) = adc(d0, $modulus.0[0] & borrow, 0);
-                let (d1, carry) = adc(d1, $modulus.0[1] & borrow, carry);
-                let (d2, carry) = adc(d2, $modulus.0[2] & borrow, carry);
-                let (d3, _) = adc(d3, $modulus.0[3] & borrow, carry);
-
-                $field([d0, d1, d2, d3])
+                (r4, carry2) = r4.overflowing_add($modulus.0[0] & borrow);
+                (r5, carry2) = adc(r5, $modulus.0[1] & borrow, carry2);
+                (r6, carry2) = adc(r6, $modulus.0[2] & borrow, carry2);
+                (r7, _) = adc(r7, $modulus.0[3] & borrow, carry2);
+                $field([r4, r5, r6, r7])
             }
         }
     };

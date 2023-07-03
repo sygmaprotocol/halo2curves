@@ -3,9 +3,10 @@ use super::fq2::Fq2;
 use core::ops::{Add, Mul, Neg, Sub};
 use ff::Field;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Hash, Serialize, Deserialize)]
 pub struct Fq6 {
     pub c0: Fq2,
     pub c1: Fq2,
@@ -683,7 +684,7 @@ fn test_frobenius() {
             let mut b = a;
 
             for _ in 0..i {
-                a = a.pow_vartime(&[
+                a = a.pow_vartime([
                     0x3c208c16d87cfd47,
                     0x97816a916871ca8d,
                     0xb85045b68181585d,

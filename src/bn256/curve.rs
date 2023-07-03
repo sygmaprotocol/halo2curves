@@ -12,6 +12,7 @@ use group::Curve;
 use group::{cofactor::CofactorGroup, prime::PrimeCurveAffine, Group as _, GroupEncoding};
 use pasta_curves::arithmetic::FieldExt;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
 use crate::{
@@ -25,7 +26,6 @@ new_curve_impl!(
     G1,
     G1Affine,
     G1Compressed,
-    G1Uncompressed,
     Fq::size(),
     Fq,
     Fr,
@@ -39,7 +39,6 @@ new_curve_impl!(
     G2,
     G2Affine,
     G2Compressed,
-    G2Uncompressed,
     Fq2::size(),
     Fq2,
     Fr,
@@ -144,7 +143,11 @@ impl CurveEndo for G1 {
     }
 
     fn endomorphism_scalars(k: &Self::ScalarExt) -> (u128, u128) {
+        #[cfg(feature = "asm")]
         let input = Fr::montgomery_reduce(&[k.0[0], k.0[1], k.0[2], k.0[3], 0, 0, 0, 0]).0;
+
+        #[cfg(not(feature = "asm"))]
+        let input = Fr::montgomery_reduce(k.0[0], k.0[1], k.0[2], k.0[3], 0, 0, 0, 0).0;
 
         let c1_512 = mul_512(ENDO_G2, input);
         let c2_512 = mul_512(ENDO_G1, input);
@@ -250,7 +253,6 @@ mod tests {
         Fr, G1Affine, G1, G2,
     };
     use ff::Field;
-    use group::Curve;
     use rand_core::OsRng;
 
     use crate::CurveExt;
@@ -300,34 +302,34 @@ mod tests {
     }
 }
 
-// impl group::UncompressedEncoding for G1Affine {
-//     type Uncompressed = G1Compressed;
+impl group::UncompressedEncoding for G1Affine {
+    type Uncompressed = G1Compressed;
 
-//     fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
-//         unimplemented!();
-//     }
+    fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
+        unimplemented!();
+    }
 
-//     fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
-//         unimplemented!();
-//     }
+    fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
+        unimplemented!();
+    }
 
-//     fn to_uncompressed(&self) -> Self::Uncompressed {
-//         unimplemented!();
-//     }
-// }
+    fn to_uncompressed(&self) -> Self::Uncompressed {
+        unimplemented!();
+    }
+}
 
-// impl group::UncompressedEncoding for G2Affine {
-//     type Uncompressed = G2Compressed;
+impl group::UncompressedEncoding for G2Affine {
+    type Uncompressed = G2Compressed;
 
-//     fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
-//         unimplemented!();
-//     }
+    fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
+        unimplemented!();
+    }
 
-//     fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
-//         unimplemented!();
-//     }
+    fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
+        unimplemented!();
+    }
 
-//     fn to_uncompressed(&self) -> Self::Uncompressed {
-//         unimplemented!();
-//     }
-// }
+    fn to_uncompressed(&self) -> Self::Uncompressed {
+        unimplemented!();
+    }
+}

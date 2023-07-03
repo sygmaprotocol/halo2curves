@@ -69,31 +69,40 @@ pub(crate) fn sqrt_tonelli_shanks<F: ff::PrimeField, S: AsRef<[u64]>>(
 }
 
 /// Compute a + b + carry, returning the result and the new carry over.
+/// The carry input must be 0 or 1; otherwise the behavior is undefined.
+/// The carryOut output is guaranteed to be 0 or 1.
 #[inline(always)]
-pub(crate) const fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
+pub(crate) const fn adc(a: u64, b: u64, carry: bool) -> (u64, bool) {
+    a.carrying_add(b, carry)
+}
+
+/// Compute a + b + carry, returning the result and the new carry as a u64.
+#[inline(always)]
+pub(crate) const fn adc_u64(a: u64, b: u64, carry: u64) -> (u64, u64) {
     let ret = (a as u128) + (b as u128) + (carry as u128);
     (ret as u64, (ret >> 64) as u64)
 }
 
-/// Compute a - (b + borrow), returning the result and the new borrow.
+/// Compute a - b - borrow, returning the result and the new borrow.
 #[inline(always)]
-pub(crate) const fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
-    let ret = (a as u128).wrapping_sub((b as u128) + ((borrow >> 63) as u128));
-    (ret as u64, (ret >> 64) as u64)
-}
-
-/// Compute a + (b * c) + carry, returning the result and the new carry over.
-#[inline(always)]
-pub(crate) const fn mac(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
-    let ret = (a as u128) + ((b as u128) * (c as u128)) + (carry as u128);
-    (ret as u64, (ret >> 64) as u64)
+pub(crate) const fn sbb(a: u64, b: u64, borrow: bool) -> (u64, bool) {
+    a.borrowing_sub(b, borrow)
 }
 
 /// Compute a + (b * c), returning the result and the new carry over.
+// Alias madd1
 #[inline(always)]
 pub(crate) const fn macx(a: u64, b: u64, c: u64) -> (u64, u64) {
-    let res = (a as u128) + ((b as u128) * (c as u128));
-    (res as u64, (res >> 64) as u64)
+    b.carrying_mul(c, a)
+}
+
+/// Compute a + (b * c) + carry, returning the result and the new carry over.
+// Alias madd2
+#[inline(always)]
+pub(crate) const fn mac(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
+    let (lo, hi) = b.carrying_mul(c, a);
+    let (lo, carry) = lo.overflowing_add(carry);
+    (lo, hi + carry as u64)
 }
 
 /// Compute a * b, returning the result.
