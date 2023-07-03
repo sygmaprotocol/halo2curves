@@ -3,6 +3,7 @@
 mod arithmetic;
 
 pub mod bn256;
+pub mod bls12_381;
 pub mod pairing;
 pub mod pasta;
 pub mod secp256k1;
