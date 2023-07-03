@@ -60,6 +60,7 @@ new_curve_impl!(
     Secp256k1,
     Secp256k1Affine,
     Secp256k1Compressed,
+    Secp256k1Uncompressed,
     33,
     Fp,
     Fq,

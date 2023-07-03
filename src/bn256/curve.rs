@@ -25,6 +25,7 @@ new_curve_impl!(
     G1,
     G1Affine,
     G1Compressed,
+    G1Uncompressed,
     Fq::size(),
     Fq,
     Fr,
@@ -38,6 +39,7 @@ new_curve_impl!(
     G2,
     G2Affine,
     G2Compressed,
+    G2Uncompressed,
     Fq2::size(),
     Fq2,
     Fr,
@@ -248,6 +250,7 @@ mod tests {
         Fr, G1Affine, G1, G2,
     };
     use ff::Field;
+    use group::Curve;
     use rand_core::OsRng;
 
     use crate::CurveExt;
@@ -297,34 +300,34 @@ mod tests {
     }
 }
 
-impl group::UncompressedEncoding for G1Affine {
-    type Uncompressed = G1Compressed;
+// impl group::UncompressedEncoding for G1Affine {
+//     type Uncompressed = G1Compressed;
 
-    fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn to_uncompressed(&self) -> Self::Uncompressed {
-        unimplemented!();
-    }
-}
+//     fn to_uncompressed(&self) -> Self::Uncompressed {
+//         unimplemented!();
+//     }
+// }
 
-impl group::UncompressedEncoding for G2Affine {
-    type Uncompressed = G2Compressed;
+// impl group::UncompressedEncoding for G2Affine {
+//     type Uncompressed = G2Compressed;
 
-    fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn to_uncompressed(&self) -> Self::Uncompressed {
-        unimplemented!();
-    }
-}
+//     fn to_uncompressed(&self) -> Self::Uncompressed {
+//         unimplemented!();
+//     }
+// }
