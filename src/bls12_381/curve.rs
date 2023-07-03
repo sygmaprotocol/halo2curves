@@ -27,6 +27,7 @@ new_curve_impl_bls12_381!(
     G1,  // $name:ident,
     G1Affine,  // $name_affine:ident,
     G1Compressed,  // $name_compressed:ident,
+    G1Uncompressed,  // $name_uncompressed:ident,
     Fq::size(),  // $compressed_size:expr,
     Fq,  // $base:ident,
     Fr,  // $scalar:ident,
@@ -40,6 +41,7 @@ new_curve_impl_bls12_381!(
     G2,  // $name:ident,
     G2Affine,  // $name_affine:ident,
     G2Compressed,  // $name_compressed:ident,
+    G2Uncompressed,  // $name_uncompressed:ident,
     Fq2::size(),  // $compressed_size:expr,
     Fq2,  // $base:ident,
     Fr,  // $scalar:ident,
@@ -403,37 +405,37 @@ mod tests {
     // }
 }
 
-impl group::UncompressedEncoding for G1Affine {
-    type Uncompressed = G1Compressed;
+// impl group::UncompressedEncoding for G1Affine {
+//     type Uncompressed = G1Compressed;
 
-    fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn to_uncompressed(&self) -> Self::Uncompressed {
-        unimplemented!();
-    }
-}
+//     fn to_uncompressed(&self) -> Self::Uncompressed {
+//         unimplemented!();
+//     }
+// }
 
-impl group::UncompressedEncoding for G2Affine {
-    type Uncompressed = G2Compressed;
+// impl group::UncompressedEncoding for G2Affine {
+//     type Uncompressed = G2Compressed;
 
-    fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
-        unimplemented!();
-    }
+//     fn from_uncompressed_unchecked(_: &Self::Uncompressed) -> CtOption<Self> {
+//         unimplemented!();
+//     }
 
-    fn to_uncompressed(&self) -> Self::Uncompressed {
-        unimplemented!();
-    }
-}
+//     fn to_uncompressed(&self) -> Self::Uncompressed {
+//         unimplemented!();
+//     }
+// }
 
 impl G1Affine {
     /// Returns true if this point is free of an $h$-torsion component, and so it

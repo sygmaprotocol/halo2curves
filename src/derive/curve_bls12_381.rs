@@ -4,6 +4,7 @@ macro_rules! new_curve_impl_bls12_381 {
     $name:ident,
     $name_affine:ident,
     $name_compressed:ident,
+    $name_uncompressed:ident,
     $compressed_size:expr,
     $base:ident,
     $scalar:ident,
@@ -28,6 +29,9 @@ macro_rules! new_curve_impl_bls12_381 {
 
         #[derive(Copy, Clone, Hash)]
         $($privacy)* struct $name_compressed([u8; $compressed_size]);
+
+        #[derive(Copy, Clone)]
+        $($privacy)* struct $name_uncompressed([u8; 2 * $compressed_size]);
 
         impl $name {
             pub fn generator() -> Self {
@@ -85,6 +89,15 @@ macro_rules! new_curve_impl_bls12_381 {
 
         // Compressed
 
+        impl std::convert::TryFrom<&[u8]> for $name_compressed {
+            type Error = std::array::TryFromSliceError;
+        
+            fn try_from(value: &[u8]) -> Result<Self, Self::Error> {   
+                use std::convert::TryInto;     
+                Ok($name_compressed(value.try_into()?))
+            }
+        }
+
         impl std::fmt::Debug for $name_compressed {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 self.0[..].fmt(f)
@@ -109,6 +122,40 @@ macro_rules! new_curve_impl_bls12_381 {
             }
         }
 
+        // Uncompressed
+        
+        impl std::convert::TryFrom<&[u8]> for $name_uncompressed {
+            type Error = std::array::TryFromSliceError;
+        
+            fn try_from(value: &[u8]) -> Result<Self, Self::Error> {   
+                use std::convert::TryInto;     
+                Ok($name_uncompressed(value.try_into()?))
+            }
+        }
+
+        impl std::fmt::Debug for $name_uncompressed {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                self.0[..].fmt(f)
+            }
+        }
+
+        impl Default for $name_uncompressed {
+            fn default() -> Self {
+                $name_uncompressed([0; 2 * $compressed_size])
+            }
+        }
+
+        impl AsRef<[u8]> for $name_uncompressed {
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
+
+        impl AsMut<[u8]> for $name_uncompressed {
+            fn as_mut(&mut self) -> &mut [u8] {
+                &mut self.0
+            }
+        }
 
         // Jacobian implementations
 
@@ -478,6 +525,69 @@ macro_rules! new_curve_impl_bls12_381 {
                 $name_compressed(self.to_compressed())
             }
         }
+
+        impl group::UncompressedEncoding for $name_affine {
+            type Uncompressed = $name_uncompressed;
+
+            fn from_uncompressed(bytes: &Self::Uncompressed) -> CtOption<Self> {
+                unimplemented!();
+            }
+
+            fn from_uncompressed_unchecked(bytes: &Self::Uncompressed) -> CtOption<Self> {
+                unimplemented!();
+                // let bytes = &bytes.0;
+                // let infinity_flag_set = Choice::from((bytes[2 * $compressed_size - 1] >> 6) & 1);
+                // // Attempt to obtain the x-coordinate
+                // let x = {
+                //     let mut tmp = [0; $compressed_size];
+                //     tmp.copy_from_slice(&bytes[0..$compressed_size]);
+                //     $base::from_bytes(&tmp)
+                // };
+
+                // // Attempt to obtain the y-coordinate
+                // let y = {
+                //     let mut tmp = [0; $compressed_size];
+                //     tmp.copy_from_slice(&bytes[$compressed_size..2*$compressed_size]);
+                //     $base::from_bytes(&tmp)
+                // };
+
+                // x.and_then(|x| {
+                //     y.and_then(|y| {
+                //         // Create a point representing this value
+                //         let p = $name_affine::conditional_select(
+                //             &$name_affine{
+                //                 x,
+                //                 y,
+                //             },
+                //             &$name_affine::identity(),
+                //             infinity_flag_set,
+                //         );
+
+                //         CtOption::new(
+                //             p,
+                //             // If the infinity flag is set, the x and y coordinates should have been zero.
+                //             ((!infinity_flag_set) | (x.is_zero() & y.is_zero()))
+                //         )
+                //     })
+                // })
+            }
+
+            fn to_uncompressed(&self) -> Self::Uncompressed {
+                let mut res = [0; 2 * $compressed_size];
+
+                res[0..$base::size()].copy_from_slice(
+                    &$base::conditional_select(&self.x, &$base::zero(), self.is_identity()).to_bytes()[..],
+                );
+                res[$base::size().. 2*$base::size()].copy_from_slice(
+                    &$base::conditional_select(&self.y, &$base::zero(), self.is_identity()).to_bytes()[..],
+                );
+
+                res[2 * $compressed_size - 1] |= u8::conditional_select(&0u8, &(1u8 << 6), self.is_identity());
+
+                $name_uncompressed(res)
+            }
+        }
+
 
         // TODO [serde] Add support for BLS12-381
         // impl $crate::serde::SerdeObject for $name_affine {
