@@ -2,12 +2,15 @@ use super::fq::Fq;
 use super::LegendreSymbol;
 use core::convert::TryInto;
 use core::ops::{Add, Mul, Neg, Sub};
-use ff::Field;
+use ff::{Field, PrimeField};
+use lazy_static::lazy_static;
+use num_bigint::BigUint;
 use pasta_curves::arithmetic::{FieldExt, Group, SqrtRatio};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
+use std::str::FromStr;
+use subtle::{Choice, ConditionallyNegatable, ConditionallySelectable, ConstantTimeEq, CtOption};
 
 const MODULUS_BITS: u32 = 381;
 
@@ -515,12 +518,116 @@ impl SqrtRatio for Fq2 {
         unimplemented!();
     }
 
-    #[cfg(feature = "sqrt-table")]
     fn sqrt_ratio(num: &Self, div: &Self) -> (Choice, Self) {
-        unimplemented!();
+        // 1. c1, the largest integer such that 2^c1 divides q - 1.
+        const C1: usize = 3;
+        // 2. c2 = (q - 1) / (2^c1)
+        // const C2: &[u64] = &[
+        //     7265783942635991495,
+        //     12654461171626608085,
+        //     7117242603539670943,
+        //     3231317604283856616,
+        //     7288461048012747785,
+        //     2570724377909988239,
+        //     16043555967369944544,
+        //     726422729336273229,
+        //     10150185336703275386,
+        //     4349230516827719894,
+        //     16823846345382421693,
+        //     23792283108797432,
+        // ];
+        // 3. c3 = (c2 - 1) / 2
+        const C3: &[u64] = &[
+            12856264008172771555,
+            15550602622668079850,
+            3558621301769835471,
+            10839030838996704116,
+            12867602560861149700,
+            1285362188954994119,
+            17245150020539748080,
+            363211364668136614,
+            5075092668351637693,
+            11397987295268635755,
+            8411923172691210846,
+            11896141554398716,
+        ];
+        // 4. c4 = 2^c1 - 1
+        const C4: &[u64] = &[7];
+        // 5. c5 = 2^(c1 - 1)
+        const C5: &[u64] = &[4];
+        // 6. c6 = Z^c2
+        const C6: Fq2 = Fq2 {
+            c0: Fq::from_raw_unchecked([
+                8921533702591418330,
+                15859389534032789116,
+                3389114680249073393,
+                15116930867080254631,
+                3288288975085550621,
+                1021049300055853010,
+            ]),
+            c1: Fq::from_raw_unchecked([
+                8921533702591418330,
+                15859389534032789116,
+                3389114680249073393,
+                15116930867080254631,
+                3288288975085550621,
+                1021049300055853010,
+            ]),
+        };
+        // 7. c7 = Z^((c2 + 1) / 2)
+        const C7: Fq2 = Fq2 {
+            c0: Fq::from_raw_unchecked([
+                1921729236329761493,
+                9193968980645934504,
+                9862280504246317678,
+                6861748847800817560,
+                10375788487011937166,
+                4460107375738415,
+            ]),
+            c1: Fq::from_raw_unchecked([
+                16821121318233475459,
+                10183025025229892778,
+                1779012082459463630,
+                3442292649700377418,
+                1061500799026501234,
+                1352426537312017168,
+            ]),
+        };
+
+        let mut tv1 = C6.clone(); // 1. tv1 = c6
+        let tv2 = div.pow_vartime(C4); // 2. tv2 = v^c4
+        let tv3 = tv2.square(); // 3. tv3 = tv2^2
+        let tv3 = tv3 * div; // 4. tv3 = tv3 * v
+        let tv5 = num * tv3; // 5. tv5 = u * tv3
+        let tv5 = tv5.pow_vartime(C3); // 6. tv5 = tv5^c3
+        let tv5 = tv5 * tv2; // 7. tv5 = tv5 * tv2
+        let tv2 = tv5 * div; // 8. tv2 = tv5 * v
+        let mut tv3 = tv5 * num; // 9. tv3 = tv5 * u
+        let mut tv4 = tv3 * tv2; // 10. tv4 = tv3 * tv2
+        let tv5 = tv4.pow_vartime(C5); // 11. tv5 = tv4^c5
+        let is_square = tv5.ct_eq(&Fq2::one()); // 12. isQR = tv5 == 1
+        let tv2 = tv3 * C7; // 13. tv2 = tv3 * c7
+        let tv5 = tv4 * tv1; // 14. tv5 = tv4 * tv1
+
+        tv3.conditional_assign(&tv2, !is_square); // 15. tv3 = CMOV(tv2, tv3, isQR)
+        tv4.conditional_assign(&tv5, !is_square); // 16. tv4 = CMOV(tv5, tv4, isQR)
+
+        // 17. for i in (c1, c1 - 1, ..., 2):
+        for i in (2..=C1).rev() {
+            let tv5 = i as u32 - 2; // 18.    tv5 = i - 2
+            let tv5 = BigUint::from(2u64).pow(tv5); // 19.    tv5 = 2^tv5
+            let tv5 = tv4.pow_vartime(&tv5.to_u64_digits()); // 20.    tv5 = tv4^tv5
+            let e1 = tv5.ct_eq(&Fq2::one()); // 21.    e1 = tv5 == 1
+            let tv2 = tv3 * tv1; // 22.    tv2 = tv3 * tv1
+            tv1 = tv1 * tv1; // 23.    tv1 = tv1 * tv1
+            let tv5 = tv4 * tv1; // 24.    tv5 = tv4 * tv1
+            tv3.conditional_assign(&tv2, !e1); // 25.    tv3 = CMOV(tv2, tv3, e1)
+            tv4.conditional_assign(&tv5, !e1); // 26.    tv4 = CMOV(tv5, tv4, e1)
+        }
+
+        (is_square, tv3)
     }
 
-    #[cfg(feature = "sqrt-table")]
     fn sqrt_alt(&self) -> (Choice, Self) {
         unimplemented!();
     }
@@ -596,7 +703,24 @@ impl ff::PrimeField for Fq2 {
     }
 
     fn root_of_unity() -> Self {
-        unimplemented!()
+        Self {
+            c0: Fq::from_raw_unchecked([
+                0x7bcf_a7a2_5aa3_0fda,
+                0xdc17_dec1_2a92_7e7c,
+                0x2f08_8dd8_6b4e_bef1,
+                0xd1ca_2087_da74_d4a7,
+                0x2da2_5966_96ce_bc1d,
+                0x0e2b_7eed_bbfd_87d2,
+            ]),
+            c1: Fq::from_raw_unchecked([
+                0x7bcf_a7a2_5aa3_0fda,
+                0xdc17_dec1_2a92_7e7c,
+                0x2f08_8dd8_6b4e_bef1,
+                0xd1ca_2087_da74_d4a7,
+                0x2da2_5966_96ce_bc1d,
+                0x0e2b_7eed_bbfd_87d2,
+            ]),
+        }
     }
 }
 

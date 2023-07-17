@@ -386,6 +386,26 @@ impl SqrtRatio for Fq {
     fn get_lower_32(&self) -> u32 {
         unimplemented!()
     }
+
+      // fn sqrt_ratio(num: &Self, div: &Self) -> (Choice, Self) {
+    //     let c1 = (super::MODULUS - Fq::from(3)) * (Fq::from(4).invert().unwrap());
+    //     println!("c1 = {:?}", c1.0);
+    //     z.conditional_negate(choice::Choice::from(1));
+    //     let c2 = z.sqrt();
+
+    //     let tv1 = div.square();
+    //     let tv2 = num * div;
+    //     let tv1 = tv1 * tv2;
+    //     let y1 = tv1.pow(&c1.0[..4].try_into().unwrap());
+    //     let mut y1 = y1 * tv2;
+    //     let y2 = y1 * c2;
+    //     let tv3 = y1.square();
+    //     let tv3 = tv3 * div;
+    //     let is_square = tv3.ct_eq(&num);
+    //     y1.conditional_assign(&y2, is_square);
+
+    //     (is_square, y1)
+    // }
 }
 
 #[cfg(test)]
