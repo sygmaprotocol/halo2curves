@@ -27,7 +27,7 @@ pub struct Fq(pub(crate) [u64; 6]);
 
 /// Constant representing the modulus
 /// q = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab
-const MODULUS: Fq = Fq([
+pub const MODULUS: Fq = Fq([
     0xb9feffffffffaaab,
     0x1eabfffeb153ffff,
     0x6730d2a0f6b0f624,

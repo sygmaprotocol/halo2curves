@@ -15,7 +15,7 @@ use subtle::{Choice, ConditionallyNegatable, ConditionallySelectable, ConstantTi
 const MODULUS_BITS: u32 = 381;
 
 /// An element of Fq2, represented by c0 + c1 * u.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize)]
 pub struct Fq2 {
     pub c0: Fq,
     pub c1: Fq,

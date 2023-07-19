@@ -89,12 +89,27 @@ macro_rules! new_curve_impl_bls12_381 {
 
         // Compressed
 
+        impl std::convert::From<[u8; $compressed_size]> for $name_compressed {        
+            fn from(value: [u8; $compressed_size]) -> Self{   
+                $name_compressed(value.into())
+            }
+        }
+
         impl std::convert::TryFrom<&[u8]> for $name_compressed {
             type Error = std::array::TryFromSliceError;
         
             fn try_from(value: &[u8]) -> Result<Self, Self::Error> {   
                 use std::convert::TryInto;     
                 Ok($name_compressed(value.try_into()?))
+            }
+        }
+
+        impl std::convert::TryFrom<Vec<u8>> for $name_compressed {
+            type Error = std::array::TryFromSliceError;
+        
+            fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {   
+                use std::convert::TryInto;     
+                Ok($name_compressed(value.as_slice().try_into()?))
             }
         }
 
@@ -513,8 +528,32 @@ macro_rules! new_curve_impl_bls12_381 {
             type Repr = $name_compressed;
 
             fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
+                let bytes = &bytes.0;
+                let mut tmp = *bytes;
+                let ysign = Choice::from(tmp[$compressed_size - 1] >> 7);
+                tmp[$compressed_size - 1] &= 0b0111_1111;
+                let mut xbytes = [0u8; $base::size()];
+                xbytes.copy_from_slice(&tmp[ ..$base::size()]);
 
-                Self::from_compressed(&bytes.0)
+                $base::from_bytes(&xbytes).and_then(|x| {
+                    CtOption::new(Self::identity(), x.is_zero() & (!ysign)).or_else(|| {
+                        let x3 = x.square() * x;
+                        (x3 + $name::curve_constant_b()).sqrt().and_then(|y| {
+                            let sign = Choice::from(y.to_bytes()[0] & 1);
+
+                            let y = $base::conditional_select(&y, &-y, ysign ^ sign);
+
+                            CtOption::new(
+                                $name_affine {
+                                    x,
+                                    y,
+                                    infinity: Choice::from(0u8),
+                                },
+                                Choice::from(1u8),
+                            )
+                        })
+                    })
+                })
             }
 
             fn from_bytes_unchecked(bytes: &Self::Repr) -> CtOption<Self> {
@@ -522,7 +561,16 @@ macro_rules! new_curve_impl_bls12_381 {
             }
 
             fn to_bytes(&self) -> Self::Repr {
-                $name_compressed(self.to_compressed())
+                if bool::from(self.is_identity()) {
+                    $name_compressed::default()
+                } else {
+                    let (x, y) = (self.x, self.y);
+                    let sign = (y.to_bytes()[0] & 1) << 7;
+                    let mut xbytes = [0u8; $compressed_size];
+                    xbytes[..$base::size()].copy_from_slice(&x.to_bytes());
+                    xbytes[$compressed_size - 1] |= sign;
+                    $name_compressed(xbytes)
+                }
             }
         }
 
@@ -530,46 +578,39 @@ macro_rules! new_curve_impl_bls12_381 {
             type Uncompressed = $name_uncompressed;
 
             fn from_uncompressed(bytes: &Self::Uncompressed) -> CtOption<Self> {
-                unimplemented!();
+                Self::from_uncompressed_unchecked(bytes)
             }
 
             fn from_uncompressed_unchecked(bytes: &Self::Uncompressed) -> CtOption<Self> {
-                unimplemented!();
-                // let bytes = &bytes.0;
+                // unimplemented!();
+                let bytes = &bytes.0;
                 // let infinity_flag_set = Choice::from((bytes[2 * $compressed_size - 1] >> 6) & 1);
-                // // Attempt to obtain the x-coordinate
-                // let x = {
-                //     let mut tmp = [0; $compressed_size];
-                //     tmp.copy_from_slice(&bytes[0..$compressed_size]);
-                //     $base::from_bytes(&tmp)
-                // };
+                // Attempt to obtain the x-coordinate
+                let x = {
+                    let mut tmp = [0; $compressed_size];
+                    tmp.copy_from_slice(&bytes[0..$compressed_size]);
+                    $base::from_bytes(&tmp)
+                };
 
-                // // Attempt to obtain the y-coordinate
-                // let y = {
-                //     let mut tmp = [0; $compressed_size];
-                //     tmp.copy_from_slice(&bytes[$compressed_size..2*$compressed_size]);
-                //     $base::from_bytes(&tmp)
-                // };
+                // Attempt to obtain the y-coordinate
+                let y = {
+                    let mut tmp = [0; $compressed_size];
+                    tmp.copy_from_slice(&bytes[$compressed_size..2*$compressed_size]);
+                    $base::from_bytes(&tmp)
+                };
 
-                // x.and_then(|x| {
-                //     y.and_then(|y| {
-                //         // Create a point representing this value
-                //         let p = $name_affine::conditional_select(
-                //             &$name_affine{
-                //                 x,
-                //                 y,
-                //             },
-                //             &$name_affine::identity(),
-                //             infinity_flag_set,
-                //         );
-
-                //         CtOption::new(
-                //             p,
-                //             // If the infinity flag is set, the x and y coordinates should have been zero.
-                //             ((!infinity_flag_set) | (x.is_zero() & y.is_zero()))
-                //         )
-                //     })
-                // })
+                x.and_then(|x| {
+                    y.and_then(|y| {
+                        CtOption::new(
+                            $name_affine{
+                                x,
+                                y,
+                                infinity: Choice::from(0u8),
+                            },
+                            Choice::from(1u8),
+                        )
+                    })
+                })
             }
 
             fn to_uncompressed(&self) -> Self::Uncompressed {

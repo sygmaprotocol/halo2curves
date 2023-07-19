@@ -228,12 +228,27 @@ macro_rules! new_curve_impl {
 
         // Compressed
 
+        impl std::convert::From<[u8; $compressed_size]> for $name_compressed {        
+            fn from(value: [u8; $compressed_size]) -> Self{   
+                $name_compressed(value.into())
+            }
+        }
+
         impl std::convert::TryFrom<&[u8]> for $name_compressed {
             type Error = std::array::TryFromSliceError;
         
             fn try_from(value: &[u8]) -> Result<Self, Self::Error> {   
                 use std::convert::TryInto;     
                 Ok($name_compressed(value.try_into()?))
+            }
+        }
+
+        impl std::convert::TryFrom<Vec<u8>> for $name_compressed {
+            type Error = std::array::TryFromSliceError;
+        
+            fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {   
+                use std::convert::TryInto;     
+                Ok($name_compressed(value.as_slice().try_into()?))
             }
         }
 

@@ -9,6 +9,7 @@ use core::ops::{Add, Mul, Neg, Sub};
 use ff::Field;
 use group::Curve;
 use group::{cofactor::CofactorGroup, prime::PrimeCurveAffine, Group as _, GroupEncoding};
+use pasta_curves::arithmetic::FieldExt;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
@@ -21,6 +22,7 @@ use crate::{
 
 use super::BLS_X;
 use super::BLS_X_IS_NEGATIVE;
+use super::MODULUS;
 
 new_curve_impl_bls12_381!(
     (pub),  // (($($privacy:tt)*),
@@ -601,8 +603,8 @@ impl G2Affine {
     pub fn from_compressed_unchecked(bytes: &[u8; 96]) -> CtOption<Self> {
         // Obtain the three flags from the start of the byte sequence
         let compression_flag_set = Choice::from((bytes[0] >> 7) & 1);
-        let infinity_flag_set = Choice::from((bytes[0] >> 6) & 1);
-        let sort_flag_set = Choice::from((bytes[0] >> 5) & 1);
+        // let infinity_flag_set = Choice::from((bytes[0] >> 6) & 1);
+        // let sort_flag_set = Choice::from((bytes[0] >> 5) & 1);
 
         // Attempt to obtain the x-coordinate
         let xc1 = {
@@ -633,9 +635,7 @@ impl G2Affine {
                 // was not set.
                 CtOption::new(
                     G2Affine::identity(),
-                    infinity_flag_set & // Infinity flag should be set
-                    compression_flag_set & // Compression flag should be set
-                    (!sort_flag_set) & // Sort flag should not be set
+                    // Sort flag should not be set
                     x.is_zero(), // The x-coordinate should be zero
                 )
                 .or_else(|| {
@@ -645,17 +645,16 @@ impl G2Affine {
                         let y = Fq2::conditional_select(
                             &y,
                             &-y,
-                            y.lexicographically_largest() ^ sort_flag_set,
+                            y.lexicographically_largest(),
                         );
 
                         CtOption::new(
                             G2Affine {
                                 x,
                                 y,
-                                infinity: infinity_flag_set,
+                                infinity: Choice::from(0u8),
                             },
-                            (!infinity_flag_set) & // Infinity flag should not be set
-                            compression_flag_set, // Compression flag should be set
+                            Choice::from(1u8), // Compression flag should be set
                         )
                     })
                 })
