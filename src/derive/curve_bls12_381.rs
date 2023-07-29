@@ -148,6 +148,16 @@ macro_rules! new_curve_impl_bls12_381 {
             }
         }
 
+
+        impl std::convert::TryFrom<Vec<u8>> for $name_uncompressed {
+            type Error = std::array::TryFromSliceError;
+        
+            fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {   
+                use std::convert::TryInto;     
+                Ok($name_uncompressed(value.as_slice().try_into()?))
+            }
+        }
+
         impl std::fmt::Debug for $name_uncompressed {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 self.0[..].fmt(f)
