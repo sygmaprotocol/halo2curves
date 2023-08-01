@@ -538,32 +538,7 @@ macro_rules! new_curve_impl_bls12_381 {
             type Repr = $name_compressed;
 
             fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
-                let bytes = &bytes.0;
-                let mut tmp = *bytes;
-                let ysign = Choice::from(tmp[$compressed_size - 1] >> 7);
-                tmp[$compressed_size - 1] &= 0b0111_1111;
-                let mut xbytes = [0u8; $base::size()];
-                xbytes.copy_from_slice(&tmp[ ..$base::size()]);
-
-                $base::from_bytes(&xbytes).and_then(|x| {
-                    CtOption::new(Self::identity(), x.is_zero() & (!ysign)).or_else(|| {
-                        let x3 = x.square() * x;
-                        (x3 + $name::curve_constant_b()).sqrt().and_then(|y| {
-                            let sign = Choice::from(y.to_bytes()[0] & 1);
-
-                            let y = $base::conditional_select(&y, &-y, ysign ^ sign);
-
-                            CtOption::new(
-                                $name_affine {
-                                    x,
-                                    y,
-                                    infinity: Choice::from(0u8),
-                                },
-                                Choice::from(1u8),
-                            )
-                        })
-                    })
-                })
+                Self::from_compressed(&bytes.0)
             }
 
             fn from_bytes_unchecked(bytes: &Self::Repr) -> CtOption<Self> {

@@ -602,26 +602,28 @@ impl G2Affine {
     /// API invariants may be broken.** Please consider using `from_compressed()` instead.
     pub fn from_compressed_unchecked(bytes: &[u8; 96]) -> CtOption<Self> {
         // Obtain the three flags from the start of the byte sequence
-        let compression_flag_set = Choice::from((bytes[0] >> 7) & 1);
+        let compression_flag_set = Choice::from((bytes[95] >> 7) & 1);
         // let infinity_flag_set = Choice::from((bytes[0] >> 6) & 1);
-        // let sort_flag_set = Choice::from((bytes[0] >> 5) & 1);
+        let sort_flag_set = Choice::from((bytes[95] >> 5) & 1);
 
         // Attempt to obtain the x-coordinate
-        let xc1 = {
+        let xc0 = {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[0..48]);
 
-            // Mask away the flag bits
-            tmp[0] &= 0b0001_1111;
-
             Fq::from_bytes(&tmp)
         };
-        let xc0 = {
+        let xc1 = {
             let mut tmp = [0; 48];
             tmp.copy_from_slice(&bytes[48..96]);
 
+            // Mask away the flag bits
+            tmp[47] &= 0b0001_1111;
+
             Fq::from_bytes(&tmp)
         };
+
+        // println!("copression flag set: {:?}", compression_flag_set);
 
         xc1.and_then(|xc1| {
             xc0.and_then(|xc0| {
@@ -640,12 +642,12 @@ impl G2Affine {
                 )
                 .or_else(|| {
                     // Recover a y-coordinate given x by y = sqrt(x^3 + 4)
-                    ((x.square() * x) + G2_B).sqrt().and_then(|y| {
+                    ((x.square() * x) + G2::curve_constant_b()).sqrt().and_then(|y| {
                         // Switch to the correct y-coordinate if necessary.
                         let y = Fq2::conditional_select(
                             &y,
                             &-y,
-                            y.lexicographically_largest(),
+                            ((y.lexicographically_largest()) ^ sort_flag_set),
                         );
 
                         CtOption::new(
