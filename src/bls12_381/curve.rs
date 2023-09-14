@@ -9,6 +9,7 @@ use core::ops::{Add, Mul, Neg, Sub};
 use ff::Field;
 use group::Curve;
 use group::{cofactor::CofactorGroup, prime::PrimeCurveAffine, Group as _, GroupEncoding};
+use num_bigint::BigUint;
 use pasta_curves::arithmetic::FieldExt;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -492,9 +493,9 @@ impl G1Affine {
     /// API invariants may be broken.** Please consider using `from_compressed()` instead.
     pub fn from_compressed_unchecked(bytes: &[u8; 48]) -> CtOption<Self> {
         // Obtain the three flags from the start of the byte sequence
-        let compression_flag_set = Choice::from((bytes[0] >> 7) & 1);
-        let infinity_flag_set = Choice::from((bytes[0] >> 6) & 1);
-        let sort_flag_set = Choice::from((bytes[0] >> 5) & 1);
+        let compression_flag_set = Choice::from((bytes[47] >> 7) & 1);
+        let infinity_flag_set = Choice::from((bytes[47] >> 6) & 1);
+        let sort_flag_set = Choice::from((bytes[47] >> 5) & 1);
 
         // Attempt to obtain the x-coordinate
         let x = {
@@ -502,7 +503,7 @@ impl G1Affine {
             tmp.copy_from_slice(&bytes[0..48]);
 
             // Mask away the flag bits
-            tmp[0] &= 0b0001_1111;
+            tmp[47] &= 0b0001_1111;
 
             Fq::from_bytes(&tmp)
         };
@@ -516,9 +517,6 @@ impl G1Affine {
             // was not set.
             CtOption::new(
                 G1Affine::identity(),
-                infinity_flag_set & // Infinity flag should be set
-                compression_flag_set & // Compression flag should be set
-                (!sort_flag_set) & // Sort flag should not be set
                 x.is_zero(), // The x-coordinate should be zero
             )
             .or_else(|| {
@@ -530,15 +528,13 @@ impl G1Affine {
                         &-y,
                         y.lexicographically_largest() ^ sort_flag_set,
                     );
-
                     CtOption::new(
                         G1Affine {
                             x,
                             y,
                             infinity: infinity_flag_set,
                         },
-                        (!infinity_flag_set) & // Infinity flag should not be set
-                        compression_flag_set, // Compression flag should be set
+                        Choice::from(1u8), // Compression flag should be set
                     )
                 })
             })
@@ -642,23 +638,25 @@ impl G2Affine {
                 )
                 .or_else(|| {
                     // Recover a y-coordinate given x by y = sqrt(x^3 + 4)
-                    ((x.square() * x) + G2::curve_constant_b()).sqrt().and_then(|y| {
-                        // Switch to the correct y-coordinate if necessary.
-                        let y = Fq2::conditional_select(
-                            &y,
-                            &-y,
-                            ((y.lexicographically_largest()) ^ sort_flag_set),
-                        );
+                    ((x.square() * x) + G2::curve_constant_b())
+                        .sqrt()
+                        .and_then(|y| {
+                            // Switch to the correct y-coordinate if necessary.
+                            let y = Fq2::conditional_select(
+                                &y,
+                                &-y,
+                                ((y.lexicographically_largest()) ^ sort_flag_set),
+                            );
 
-                        CtOption::new(
-                            G2Affine {
-                                x,
-                                y,
-                                infinity: Choice::from(0u8),
-                            },
-                            Choice::from(1u8), // Compression flag should be set
-                        )
-                    })
+                            CtOption::new(
+                                G2Affine {
+                                    x,
+                                    y,
+                                    infinity: Choice::from(0u8),
+                                },
+                                Choice::from(1u8), // Compression flag should be set
+                            )
+                        })
                 })
             })
         })
