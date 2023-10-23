@@ -2,6 +2,7 @@
 
 mod arithmetic;
 
+pub mod bls12_381;
 pub mod bn256;
 pub mod grumpkin;
 pub mod pairing;
